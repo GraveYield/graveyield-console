@@ -49,8 +49,8 @@
 
   /* ── Mark Web3 Design System · GraveYield adaptation ─────────────
      Dark-mode-first foundations (skill: mark-web3-design-system)
-     bg #161618 · card surface #1E1E1E (flat, unified) · emerald / cyan / violet accents */
-  --background: #161618;
+     bg #161616 · card surface #1E1E1E (flat, unified) · emerald / cyan / violet accents */
+  --background: #161616;
   --foreground: #E6EBF2;
   --card: #1E1E1E;
   --card-foreground: #E6EBF2;
@@ -73,7 +73,7 @@
   --chart-3: #9945FF;
   --chart-4: #F59E0B;
   --chart-5: #EF4444;
-  --sidebar: #161618;
+  --sidebar: #161616;
   --sidebar-foreground: #E6EBF2;
   --sidebar-primary: #10B981;
   --sidebar-primary-foreground: #052016;

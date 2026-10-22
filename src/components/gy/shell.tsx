@@ -300,7 +300,7 @@ function WalletButton() {
 function TopBar() {
   const pct = Math.round(EPOCH.progress * 100);
   return (
-    <header className="sticky top-0 z-30 border-b border-white/8 bg-[#161618]/85 backdrop-blur-md">
+    <header className="sticky top-0 z-30 border-b border-white/8 bg-[#161616]/85 backdrop-blur-md">
       <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
         {/* mobile brand */}
         <div className="flex items-center gap-2 lg:hidden">
@@ -387,7 +387,7 @@ export function Shell({
       <TopBar />
       <div className="mx-auto flex w-full max-w-[1440px] flex-1">
         {/* Desktop sidebar */}
-        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-64 shrink-0 flex-col border-r border-white/8 bg-[#161618]/60 px-4 py-5 lg:flex">
+        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-64 shrink-0 flex-col border-r border-white/8 bg-[#161616]/60 px-4 py-5 lg:flex">
           <div className="mb-6 hidden items-center px-1 lg:flex">
             <BrandMark />
           </div>
@@ -397,7 +397,7 @@ export function Shell({
         {/* Main column */}
         <div className="flex min-w-0 flex-1 flex-col">
           <main className="flex-1 px-4 pb-28 pt-5 sm:px-6 lg:pb-10">{children}</main>
-          <footer className="mt-auto border-t border-white/8 bg-[#161618]/70 px-4 pt-5 pb-28 sm:px-6 lg:pb-24">
+          <footer className="mt-auto border-t border-white/8 bg-[#161616]/70 px-4 pt-5 pb-28 sm:px-6 lg:pb-24">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-[11.5px] text-slate-500">
                 Simulated telemetry · not financial advice
@@ -411,7 +411,7 @@ export function Shell({
       {/* Mobile bottom dock (skill: thumb-zone navigation) */}
       <nav
         aria-label="Console sections"
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#161618]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#161616]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden"
       >
         <div className="grid grid-cols-5">
           {NAV.map((item) => {
