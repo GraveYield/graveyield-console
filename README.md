@@ -35,7 +35,7 @@ Everything else is deliberately honest: the header carries a **"Simulated teleme
 ## Tech stack
 
 - **Next.js 16** (App Router) · **React 19** · **TypeScript**
-- **Tailwind CSS** + shadcn/ui (Radix primitives) — dark-first flat neutral theme, Manrope
+- **Tailwind CSS** + shadcn/ui (Radix primitives) — dark-first flat neutral theme, Inter
 - **@solana/web3.js** + **@solana/wallet-adapter-react** (Wallet Standard detection, devnet RPC)
 - **Bun** as the package manager and runtime
 
