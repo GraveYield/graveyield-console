@@ -65,7 +65,7 @@ function NavList({
               )}
             />
             <span className="flex-1">
-              <span className="block text-sm font-medium leading-tight">{item.label}</span>
+              <span className="block text-sm font-semibold leading-tight">{item.label}</span>
               <span className="block text-[10.5px] leading-tight text-muted-foreground">
                 {item.hint}
               </span>
@@ -429,7 +429,7 @@ export function Shell({
                 )}
               >
                 <Icon className="h-5 w-5" />
-                <span className="text-[10px] font-medium leading-none">{item.label}</span>
+                <span className="text-[10px] font-semibold leading-none">{item.label}</span>
               </button>
             );
           })}

@@ -53,7 +53,7 @@ export function Fleet({ bots }: { bots: Bot[] }) {
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-3">
-                    <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04]">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-black">
                       <Icon className="h-5 w-5 text-slate-200" />
                     </span>
                     <div>
