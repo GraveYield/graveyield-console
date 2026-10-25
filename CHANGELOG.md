@@ -5,6 +5,23 @@ Commit identity convention: all GraveYield engineering commits are authored as s
 
 ## [Unreleased]
 
+### Build + reliability — 2026-10-25 (Phase 1: type gate enforced, first CI, template cleanup)
+
+Charter: stabilize build and test workflows without changing product behavior or weakening security controls. No UI, economic-estimate, or security behavior was modified — TypeScript-level fixes only (type target, icon alias, branded wallet name), plus removal of verified-dead template scaffolding.
+
+Changes:
+
+- **TypeScript build-error bypass removed.** `next.config.ts` carried `typescript.ignoreBuildErrors: true` since the template was scaffolded: every production build to date compiled the tree WITHOUT type checking. Removed; `bun run typecheck` (`tsc --noEmit`) added as a standalone gate, and `next build` now fails on type errors (negative-tested: a deliberate type error exits 1 with TS2322).
+- **Real errors the bypass was hiding — fixed, zero behavior change:**
+  - `tsconfig.json` target ES2017 vs 62 BigInt-literal sites (claims/fleet/graveyard/overview/data/estimator) → target raised to ES2020. The Solana/wallet stack is BigInt-native; Next transpiles per browserslist, so shipped runtime output is unchanged. Stale incremental cache (`tsconfig.tsbuildinfo`) had been masking the mismatch.
+  - `fleet.tsx`: lucide-react's `Bot` icon collided with the domain type `Bot` (`@/lib/gy/types`) — TS2300 duplicate identifier + TS2749 use-as-type. Icon aliased to `BotIcon`.
+  - `shell.tsx`: wallet-picker callback took a plain `string` where the adapter's `select()` requires branded `WalletName` (TS2345). Parameter typed `WalletName`; callers already pass `w.adapter.name` (branded upstream) — no cast needed.
+  - `noImplicitAny` re-enabled (strict was on but the flag was silently `false`): passes with zero errors on the current tree.
+- **Template scaffolding removed (each verified unreferenced before deletion):** the template `Hello, world!` API route (`src/app/api/route.ts`, zero `/api` references in `src/`), the Prisma stack (`src/lib/db.ts` singleton with zero importers; `prisma/schema.prisma` with only template User/Post models, zero `prisma.<model>` usage, no migrations, no datasource config) with its dependencies and `db:*` scripts, and the unused `z-ai-web-dev-sdk` dependency. Package renamed from the verbatim template name `nextjs_tailwind_shadcn_ts` to `graveyield-console`.
+- **First CI workflow** (`.github/workflows/ci.yml`): frozen-lockfile install → `tsc --noEmit` → eslint → production build (typecheck enforced) → `bun audit` kept merge-blocking at zero findings. No unit test battery exists (Phase 0 record); the production build is the test.
+
+Post-change verification: `bun install` green; `typecheck` green; `lint` green; production build green (all routes prerendered); `bun audit` — no vulnerabilities found.
+
 ### Security — 2026-10-25 (dependency triage: fleet override treatment)
 
 Baseline: this repository had never been dependency-triaged (static-review-only in the Phase 0 audit, commit e34b1df in graveyield-protocol). Toolchain is bun (bun.lock); the tree consumes `@solana/web3.js` 1.99.0 and the wallet-adapter family, which carries the same `web3.js → jayson → uuid / stream-json` transitive chain patched in salvor-bots (32e913a) and graveyield-protocol (69ac241).
