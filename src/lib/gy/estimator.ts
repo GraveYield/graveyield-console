@@ -153,7 +153,10 @@ export function criteriaOf(
   pool: import("./types").Pool,
   now: number,
 ): import("./types").Criterion[] {
-  const daysSinceSwap = Math.floor((now - pool.lastSwapUnix) / 86_400_000);
+  // `now` is Date.now() (milliseconds); pool.lastSwapUnix is unix SECONDS.
+  // The unit normalization is done here — a mixed-unit subtraction once
+  // made C1 pass unconditionally (caught by the estimator battery).
+  const daysSinceSwap = Math.floor((now - pool.lastSwapUnix * 1000) / 86_400_000);
   const c1Pass = daysSinceSwap >= 90;
   const c2Pass = pool.collapseBps >= 9_900;
   const c3Pass = pool.quoteReserveLamports >= 500_000_000n;

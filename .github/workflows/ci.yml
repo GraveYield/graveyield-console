@@ -24,7 +24,7 @@ jobs:
   # build is the battery") — the production build IS the test, and since
   # typescript.ignoreBuildErrors was removed it type-checks for real.
   verify:
-    name: typecheck + lint + build + audit
+    name: typecheck + lint + test + build + audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -38,6 +38,11 @@ jobs:
         run: bun run typecheck
       - name: Lint (eslint)
         run: bun run lint
+      # Unit battery (bun test, zero new deps): estimator integer economics
+      # (FLEET-M1 vectors), six-criteria logic, display formatters. This is
+      # the gate that caught the C1 ms-vs-seconds unit bug at introduction.
+      - name: Unit tests (bun test)
+        run: bun run test
       # next build runs its own tsc pass now that the bypass flag is gone;
       # verified by negative test (deliberate type error fails the build).
       - name: Production build (typecheck enforced)
