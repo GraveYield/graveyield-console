@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Bot, Eye, ShieldAlert, Telescope, Crosshair, FlaskConical } from "lucide-react";
+import { Bot as BotIcon, Eye, ShieldAlert, Telescope, Crosshair, FlaskConical } from "lucide-react";
 import { MiniStat, SectionHead, ToneBadge } from "./widgets";
 import type { Bot, BotEvent } from "@/lib/gy/types";
 import { cn } from "@/lib/utils";
@@ -38,7 +38,7 @@ export function Fleet({ bots }: { bots: Bot[] }) {
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {bots.map((bot) => {
-          const Icon = BOT_ICON[bot.id] ?? Bot;
+          const Icon = BOT_ICON[bot.id] ?? BotIcon;
           return (
             <Card
               key={bot.id}

@@ -14,9 +14,6 @@ const nextConfig: NextConfig = {
   turbopack: {
     root,
   },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   reactStrictMode: false,
 };
 

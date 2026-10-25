@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import type { WalletName } from "@solana/wallet-adapter-base";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { WalletReadyState } from "@solana/wallet-adapter-base";
 import { cn } from "@/lib/utils";
@@ -135,7 +136,7 @@ function WalletButton() {
 
   const detected = wallets.filter((w) => w.readyState !== WalletReadyState.NotDetected);
 
-  const onPick = (name: string) => {
+  const onPick = (name: WalletName) => {
     setOpen(false);
     if (wallet?.adapter.name === name) {
       connect().catch(() => {
