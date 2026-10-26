@@ -1,11 +1,14 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Fingerprint, Scale, ShieldCheck } from "lucide-react";
+import { Activity, Fingerprint, RefreshCw, Scale, ShieldCheck } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { KpiCard, SplitBar, ToneBadge, MiniStat } from "./widgets";
 import { CONFIG, PROGRAM_IDS } from "@/lib/gy/data";
+import { fetchProtocolPulse, type ProtocolPulse } from "@/lib/gy/protocolLive";
 import type { BotEvent, Pool } from "@/lib/gy/types";
-import { fmtSol } from "@/lib/gy/format";
+import { fmtSol, fmtUtcClock, shortAddr } from "@/lib/gy/format";
 import { cn } from "@/lib/utils";
 
 const KIND_STYLE: Record<BotEvent["kind"], string> = {
@@ -20,6 +23,23 @@ const KIND_STYLE: Record<BotEvent["kind"], string> = {
 };
 
 export function Overview({ pools, events }: { pools: Pool[]; events: BotEvent[] }) {
+  /* Live protocol pulse — read-only devnet reads, decoded with
+     discriminator-checked layouts, partial availability preserved. */
+  const [pulse, setPulse] = useState<ProtocolPulse | null>(null);
+  const [pulseError, setPulseError] = useState<string | null>(null);
+  const [pulseLoading, setPulseLoading] = useState(false);
+  const refreshPulse = useCallback(() => {
+    setPulseLoading(true);
+    fetchProtocolPulse()
+      .then((p) => {
+        setPulse(p);
+        setPulseError(null);
+      })
+      .catch((err) => setPulseError(String((err as Error).message ?? err).slice(0, 140)))
+      .finally(() => setPulseLoading(false));
+  }, []);
+  useEffect(refreshPulse, [refreshPulse]);
+
   const certified = pools.filter((p) => p.state === "certified");
   const ready = pools.filter((p) => p.state === "certification-ready");
   const waiting = pools.filter((p) => p.state === "waiting-epochs");
@@ -34,8 +54,15 @@ export function Overview({ pools, events }: { pools: Pool[]; events: BotEvent[] 
 
   return (
     <div className="animate-fade-up space-y-6">
-      {/* KPI grid */}
-      <section aria-label="Protocol KPIs" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+      {/* KPI grid — SIMULATED fixture data (snapshot pools live in the Graveyard) */}
+      <section aria-label="Protocol KPIs" className="space-y-2">
+        <div className="flex items-center gap-2">
+          <ToneBadge tone="muted">simulated fixture data</ToneBadge>
+          <span className="text-[11px] text-slate-500">
+            real candidate pools are in the Graveyard view
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <KpiCard
           label="Pools tracked"
           value={tracked.length}
@@ -60,6 +87,108 @@ export function Overview({ pools, events }: { pools: Pool[]; events: BotEvent[] 
           sub={settledPool ? `${settledPool.baseSymbol} · claims open` : "none yet"}
           accent="violet"
         />
+        </div>
+      </section>
+
+      {/* Protocol pulse — LIVE read-only devnet state (P3-A Task 3.3). */}
+      <section>
+        <Card className="glass-panel border-white/8">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base">
+              <span className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-cyan-400" />
+                Protocol pulse — live (read-only devnet)
+              </span>
+              <span className="flex items-center gap-2">
+                <ToneBadge tone={pulseError ? "bad" : pulse ? "ok" : "muted"} dot={!pulseLoading}>
+                  {pulseLoading ? "checking…" : pulseError ? "unavailable" : pulse ? "live" : "checking…"}
+                </ToneBadge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 border-white/10 px-2 text-[11px] text-slate-300 hover:bg-white/5"
+                  onClick={refreshPulse}
+                  disabled={pulseLoading}
+                  aria-label="Re-check protocol pulse"
+                >
+                  <RefreshCw className={cn("h-3 w-3", pulseLoading && "animate-spin")} />
+                </Button>
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {pulseError ? (
+              <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 font-mono text-xs text-red-300">
+                unavailable — {pulseError}
+              </p>
+            ) : !pulse ? (
+              <p className="text-xs text-slate-500">reading deployed programs…</p>
+            ) : (
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[pulse.scanner, pulse.vault].map((p) => (
+                    <div
+                      key={p.programId}
+                      className="space-y-1.5 rounded-lg border border-white/8 bg-white/[0.03] p-3 font-mono text-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500">{p === pulse.scanner ? "GraveScanner" : "GraveVault"}</span>
+                        <ToneBadge tone={p.executable === null ? "muted" : p.executable ? "ok" : "bad"}>
+                          {p.executable === null ? "lookup unavailable" : p.executable ? "deployed · executable" : "not executable"}
+                        </ToneBadge>
+                      </div>
+                      <div className="text-slate-500">
+                        program <span className="text-slate-300">{shortAddr(p.programId, 6, 6)}</span>
+                      </div>
+                      {p.config ? (
+                        <>
+                          <div className="text-slate-500">
+                            authority <span className="text-slate-300">{shortAddr(p.config.authority, 4, 4)}</span>
+                          </div>
+                          {"inactivitySeconds" in p.config ? (
+                            <>
+                              <div className="text-slate-500">
+                                C1 window <span className="text-slate-300">{Number(BigInt(p.config.inactivitySeconds) / 86_400n)} d</span>
+                                {" · "}C3 floor <span className="text-slate-300">{fmtSol(BigInt(p.config.minTvlLamports))} SOL</span>
+                              </div>
+                              <div className="text-slate-500">
+                                paused <span className={p.config.paused ? "text-amber-300" : "text-emerald-300"}>{String(p.config.paused)}</span>
+                                {" · "}bump <span className="text-slate-300">{p.config.bump}</span>
+                              </div>
+                              <div className="text-slate-500">
+                                activity oracle <span className="text-slate-300">{shortAddr(p.config.activityOracle, 4, 4)}</span>
+                                {" · "}launch-price oracle <span className="text-slate-300">{shortAddr(p.config.launchPriceOracle, 4, 4)}</span>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="text-slate-500">
+                                split <span className="text-slate-300">{p.config.lpHolderShareBps}/{p.config.salvorShareBps}/≤{p.config.protocolShareBps} bps</span>
+                                {" · "}slippage cap <span className="text-slate-300">{p.config.maxSlippageBps} bps</span>
+                              </div>
+                              <div className="text-slate-500">
+                                emergency paused <span className={p.config.emergencyPaused ? "text-amber-300" : "text-emerald-300"}>{String(p.config.emergencyPaused)}</span>
+                                {" · "}bump <span className="text-slate-300">{p.config.bump}</span>
+                              </div>
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        <div className="text-amber-300/80">config unavailable — {p.configError}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-500">
+                  Decoded from the deployed ProtocolConfig PDAs via {pulse.rpcHost} at{" "}
+                  {fmtUtcClock(new Date(pulse.fetchedAtUnixMs))} UTC — Anchor-discriminator checked,
+                  layout-pinned by unit tests, cross-verified against the protocol SDK. Unavailable
+                  rows are shown as such, never defaulted.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </section>
 
       {/* Split + receipt */}
