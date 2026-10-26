@@ -1,0 +1,402 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUnixMs": 1793042252853,
+  "cluster": "mainnet-beta",
+  "indexerGitHead": "20b3eef161398fef56e8cff48028f0793ca53827",
+  "provenance": {
+    "source": "raydium-v4-gpa",
+    "endpointKind": "public-rpc",
+    "slotLowerBound": 461779464,
+    "slotUpperBound": 461779554,
+    "ordering": "ascending base58 pool address (reproducible)",
+    "fingerprintPolicy": "sha256(pool address bytes ‖ raw 752-byte account payload)"
+  },
+  "freshness": {
+    "maxAgeMs": 86400000
+  },
+  "counts": {
+    "rawAccounts": 706002,
+    "parsedPools": 120,
+    "supportedWsolPairs": 118,
+    "enriched": 12
+  },
+  "failures": [
+    {
+      "stage": "activity",
+      "pool": "1113EtuNgKEJ23D4f82Hwnis6A7KgK8uNBFvSrSP2a2",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "117btd2XXWgpjVKmticdHBbpypMAohf9D8sKswGtjtd",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "11GRaYGfuX2QzJZnCKquetBbdri7ioNNPRmt6WTZsnR",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "11NfbVmuyYaMmkTtLQKHyH2vLFx1CUpdjbHBNQw7RY2",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "11T4LcVxVRrmdvefKuJuAeAmHPiR1kisxFHerFr8rFL",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "11c5Siv7JkbvF2AZhiYBar6Soc1kHg57iww2vojGiYW",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "11jKXicHQYtYY7DE4bMMUaX6sq52ZjaPK2CFq5czJmn",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "11nhDn9s8UyYVZG3mPmWmaQMNcYo9i9s35gh6xv3TXE",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "123PgJtPUg7muS95sSZYdu9UfP7WDtnzcA5NSehNUdZ",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "123RZbxbTNSAxxf3p17uaaFjFBm25UQ6yamFifjuGTP",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    },
+    {
+      "stage": "activity",
+      "pool": "12EHKtiT1rKQ7YwxNXRamPNF7Njo7Esy6gbuPRoyVjb",
+      "reason": "Failed to get account keys because address table lookups were not resolved"
+    }
+  ],
+  "thresholds": {
+    "inactivitySeconds": "7776000",
+    "minTvlLamports": "500000000"
+  },
+  "pools": [
+    {
+      "address": "1113EtuNgKEJ23D4f82Hwnis6A7KgK8uNBFvSrSP2a2",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "yHQEHGqdZ4C2HREPQR4ruHutaV5U3FuYMUZCb7wpump",
+      "lpMint": "563J1N2zX4QHG9yAM8Gpd5397QXwj1BsoTJkqNpTzeq2",
+      "wsolSide": {
+        "memecoinMint": "yHQEHGqdZ4C2HREPQR4ruHutaV5U3FuYMUZCb7wpump",
+        "coinIsWsol": true
+      },
+      "wsolReserveLamports": "17784345446",
+      "memecoinReserveRaw": "997061608339287",
+      "memecoinDecimals": 6,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "pass",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "538b6a8255b6d161d81628bdb1eb20b5cd1eff5230c4ed343efd40ff228ee7b0",
+      "fetchedAtUnixMs": 1793042236995
+    },
+    {
+      "address": "117btd2XXWgpjVKmticdHBbpypMAohf9D8sKswGtjtd",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "8ACfFkb2cMLfZGa9YcMYKxGvTCrTDtGuQjdQhoReifNN",
+      "quoteMint": "So11111111111111111111111111111111111111112",
+      "lpMint": "Djn79QBHPeHeyvGMdWPNi1PmcY8BF2c3qho1RLhX77j1",
+      "wsolSide": {
+        "memecoinMint": "8ACfFkb2cMLfZGa9YcMYKxGvTCrTDtGuQjdQhoReifNN",
+        "coinIsWsol": false
+      },
+      "wsolReserveLamports": "5142037",
+      "memecoinReserveRaw": "4245154358",
+      "memecoinDecimals": 6,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "fail",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "101831d591662342a5dde71946e59ee2347bc2d4a13eb8693a78f86c3bab398a",
+      "fetchedAtUnixMs": 1793042238489
+    },
+    {
+      "address": "11GRaYGfuX2QzJZnCKquetBbdri7ioNNPRmt6WTZsnR",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "CLHKz9nfymRAiJj7skqmVvrZMxwksoFv4rcKGig4EcR",
+      "quoteMint": "So11111111111111111111111111111111111111112",
+      "lpMint": "3Y3F1MymVeuT58wPxXGEv9BqWRBWCRapfEHqMsMdM6x8",
+      "wsolSide": {
+        "memecoinMint": "CLHKz9nfymRAiJj7skqmVvrZMxwksoFv4rcKGig4EcR",
+        "coinIsWsol": false
+      },
+      "wsolReserveLamports": "5860072",
+      "memecoinReserveRaw": "9147203150122256",
+      "memecoinDecimals": 9,
+      "lpSupplyRaw": "8081498",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "fail",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "fa2bcd69a4a915d96206cbc9436b71d0fed2eab135efe1d40c075f6aca2b28a9",
+      "fetchedAtUnixMs": 1793042239825
+    },
+    {
+      "address": "11MS2AFhVXZ1EnvsfuWURhgchUoQNZ1k5MxZyBo8YSx",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "FWMdRPoMEMEwUvUTiRtxWGzwg8a4bM3JHsZvz29RJ1Q3",
+      "quoteMint": "So11111111111111111111111111111111111111112",
+      "lpMint": "952AfauhV1CQKpaZFCfW3vMJKQekVfxrFgxgPEF457MQ",
+      "wsolSide": {
+        "memecoinMint": "FWMdRPoMEMEwUvUTiRtxWGzwg8a4bM3JHsZvz29RJ1Q3",
+        "coinIsWsol": false
+      },
+      "wsolReserveLamports": "2004277",
+      "memecoinReserveRaw": "114449169100",
+      "memecoinDecimals": 6,
+      "lpSupplyRaw": "0",
+      "lastSwap": {
+        "unixTs": 1759460872,
+        "slot": 370830876,
+        "signature": "2PUbDQXfrpgAPgo5WQTvn1P4nz2fU1JdJLSzv5v6z8sawfvVrp5NTdrsdds8z1DXiKEDU2oFgVQybhkiuUhmSdev"
+      },
+      "criteria": {
+        "c1Inactivity": "pass",
+        "c3MinTvl": "fail",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "76117d7f3827199ab4dd8fca25ef4c4358b94e571237891ed29e0b4f4145f01e",
+      "fetchedAtUnixMs": 1793042241218
+    },
+    {
+      "address": "11NfbVmuyYaMmkTtLQKHyH2vLFx1CUpdjbHBNQw7RY2",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "9b9u2HJxcDhLEmNwndSAGqQU1T716knPzJwjiUu7cmmg",
+      "quoteMint": "So11111111111111111111111111111111111111112",
+      "lpMint": "BeTBJezWGFiKnJSgfQjjH8ZqBHawMC3JGYq3ynDDRkHG",
+      "wsolSide": {
+        "memecoinMint": "9b9u2HJxcDhLEmNwndSAGqQU1T716knPzJwjiUu7cmmg",
+        "coinIsWsol": false
+      },
+      "wsolReserveLamports": "239572245",
+      "memecoinReserveRaw": "858368497883018",
+      "memecoinDecimals": 6,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "fail",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "1fb113d935611918181a1b689ea35dab3cc169ceb7a9ef8c28f074da8856a647",
+      "fetchedAtUnixMs": 1793042242376
+    },
+    {
+      "address": "11T4LcVxVRrmdvefKuJuAeAmHPiR1kisxFHerFr8rFL",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "GzrnjQPa9W5689G25hagxcNbZL1MXyLoGsSE99Xfpump",
+      "lpMint": "6LuUAPAFRjzHhx545NFv65tomXCkgxxXMGi1QmoDr2BG",
+      "wsolSide": {
+        "memecoinMint": "GzrnjQPa9W5689G25hagxcNbZL1MXyLoGsSE99Xfpump",
+        "coinIsWsol": true
+      },
+      "wsolReserveLamports": "16749024502",
+      "memecoinReserveRaw": "992027908373577",
+      "memecoinDecimals": 6,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "pass",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "9e16a36fe6d5e206ff56b484bd3c3ed261096f0c7bd0b72c50f4964db8096266",
+      "fetchedAtUnixMs": 1793042243720
+    },
+    {
+      "address": "11c5Siv7JkbvF2AZhiYBar6Soc1kHg57iww2vojGiYW",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "ByTAAxBccN9YjqxtZBfk2EN1aJvYzUy311Tagfw14Xnp",
+      "quoteMint": "So11111111111111111111111111111111111111112",
+      "lpMint": "8rsohU2RyDZrRkrwJoRM6PJevsjC5hD43dsHejN5UJ3B",
+      "wsolSide": {
+        "memecoinMint": "ByTAAxBccN9YjqxtZBfk2EN1aJvYzUy311Tagfw14Xnp",
+        "coinIsWsol": false
+      },
+      "wsolReserveLamports": "125133391",
+      "memecoinReserveRaw": "9828564186517633116",
+      "memecoinDecimals": 6,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "fail",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "5dad4dadbaf6d26b22fc068399169e472ad7ef2ec96af91a7096439e8c0d77e7",
+      "fetchedAtUnixMs": 1793042244764
+    },
+    {
+      "address": "11jKXicHQYtYY7DE4bMMUaX6sq52ZjaPK2CFq5czJmn",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "7mKLVCZykF7GCjGBE1KyFNXjyzvd9DQduyR2utQppump",
+      "lpMint": "7wUNMRuRANyZ6eunzC9J9bzxmLuMgb16CkWCfs5reLsY",
+      "wsolSide": {
+        "memecoinMint": "7mKLVCZykF7GCjGBE1KyFNXjyzvd9DQduyR2utQppump",
+        "coinIsWsol": true
+      },
+      "wsolReserveLamports": "18397768842",
+      "memecoinReserveRaw": "970121888348150",
+      "memecoinDecimals": 6,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "pass",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "e92f7495060c38dc4c9b0715253adf798e21acb7280d4fe8e5d46a7e10b2a336",
+      "fetchedAtUnixMs": 1793042246073
+    },
+    {
+      "address": "11nhDn9s8UyYVZG3mPmWmaQMNcYo9i9s35gh6xv3TXE",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "So11111111111111111111111111111111111111112",
+      "quoteMint": "BhbpAXoUP8KLTXzKSYo3HbY3iKdqieuXKFaiGAfApump",
+      "lpMint": "4MyUtzDupxEeJNwZGYLCHRViLfPFa9pzvbi2ZecYASa4",
+      "wsolSide": {
+        "memecoinMint": "BhbpAXoUP8KLTXzKSYo3HbY3iKdqieuXKFaiGAfApump",
+        "coinIsWsol": true
+      },
+      "wsolReserveLamports": "18955049471",
+      "memecoinReserveRaw": "930956344795399",
+      "memecoinDecimals": 6,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "pass",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "0745ec8c15d6528bfbdd9692f4a6fdd003f0a4aa0052c355fe8758335a396912",
+      "fetchedAtUnixMs": 1793042247247
+    },
+    {
+      "address": "123PgJtPUg7muS95sSZYdu9UfP7WDtnzcA5NSehNUdZ",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "7diLLPAKp5aJVwoRAVosbuQfyyiTjJFxZKHQaDQvHU6z",
+      "quoteMint": "So11111111111111111111111111111111111111112",
+      "lpMint": "8mTY2eyujjBZjwwbBdWi8XSf81QGFt5YzY7uAueZJK2U",
+      "wsolSide": {
+        "memecoinMint": "7diLLPAKp5aJVwoRAVosbuQfyyiTjJFxZKHQaDQvHU6z",
+        "coinIsWsol": false
+      },
+      "wsolReserveLamports": "8779409586",
+      "memecoinReserveRaw": "1318230673937037",
+      "memecoinDecimals": 5,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "pass",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "1073d59c690184127c9db513e4b574b8c01d3b477efbf54efe12af1482ea1e42",
+      "fetchedAtUnixMs": 1793042248507
+    },
+    {
+      "address": "123RZbxbTNSAxxf3p17uaaFjFBm25UQ6yamFifjuGTP",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "D9YXQWGvwhAuz7EbCm7WnmaZQZ6zSppjcbdAwWfrrWXm",
+      "quoteMint": "So11111111111111111111111111111111111111112",
+      "lpMint": "FqfpFcsxRywtBzfVd9YGLdXuNhBAmJBNW4tHVoFe4BVp",
+      "wsolSide": {
+        "memecoinMint": "D9YXQWGvwhAuz7EbCm7WnmaZQZ6zSppjcbdAwWfrrWXm",
+        "coinIsWsol": false
+      },
+      "wsolReserveLamports": "5044512",
+      "memecoinReserveRaw": "2284120854811883",
+      "memecoinDecimals": 9,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "fail",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "5cf2088a13c2ce2bf65f721cbc3ea09a0748028b3f832450d40a8f9d9078bf77",
+      "fetchedAtUnixMs": 1793042249886
+    },
+    {
+      "address": "12EHKtiT1rKQ7YwxNXRamPNF7Njo7Esy6gbuPRoyVjb",
+      "ammProgramId": "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+      "baseMint": "LUWydsK4MoFz3Du3VTF3SFVEMNDDkVw9EjSSe56v8am",
+      "quoteMint": "So11111111111111111111111111111111111111112",
+      "lpMint": "Dhg1UgK43mbnfaWCN43uL5b6A8Kus1gPDQWJ8uPPPnc2",
+      "wsolSide": {
+        "memecoinMint": "LUWydsK4MoFz3Du3VTF3SFVEMNDDkVw9EjSSe56v8am",
+        "coinIsWsol": false
+      },
+      "wsolReserveLamports": "725412",
+      "memecoinReserveRaw": "86550889119829122",
+      "memecoinDecimals": 9,
+      "lpSupplyRaw": "0",
+      "lastSwap": null,
+      "criteria": {
+        "c1Inactivity": "pending",
+        "c3MinTvl": "fail",
+        "c2PriceCollapse": "pending",
+        "c4LpBurned": "pending",
+        "c5LpLocked": "pending",
+        "c6MultiEpoch": "pending"
+      },
+      "fingerprint": "e62984bcba3460975213de0cb9442e6df27028670b251f4de0cbf07845fcdbf2",
+      "fetchedAtUnixMs": 1793042251284
+    }
+  ]
+}
