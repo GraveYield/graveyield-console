@@ -198,4 +198,17 @@ describe("snapshot loader — fail-closed validation", () => {
       parseSnapshot(corrupt((s) => { s.freshness = { maxAgeMs: -5 }; })),
     ).toThrow(SnapshotError);
   });
+
+  test("freshness validation — artifact timestamps are structurally sane", () => {
+    // generatedAt must not be in the future (clock-skew tolerance 5 min) —
+    // a future-dated artifact would never honestly render as stale.
+    expect(SNAPSHOT.generatedAtUnixMs).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
+    // The refresh policy default is 24 h — a different budget is a
+    // deliberate contract change and must be reviewed.
+    expect(MAX_AGE).toBe(24 * 3_600_000);
+    // Per-pool fetch times must not postdate the artifact generation.
+    for (const p of SNAPSHOT.pools) {
+      expect(p.fetchedAtUnixMs).toBeLessThanOrEqual(SNAPSHOT.generatedAtUnixMs + 60_000);
+    }
+  });
 });
