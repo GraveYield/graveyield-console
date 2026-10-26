@@ -4,7 +4,7 @@
 //   - docs/PROTOCOL_SPEC.md §2–§4 (frozen architecture, six criteria)
 //   - docs/whitepaper.md §3–§5 (criteria, 40/40/20, charter invariants)
 //   - docs/error_codes.md (Scanner 6000–6034, Vault 7000–7022)
-//   - docs/DEVNET.md (program IDs, 9 Oct 2026 deployment)
+//   - docs/DEVNET.md (program IDs, NS-2 / DR-001 refresh of 2026-10-25)
 //   - salvor-bots/README.md (the five-bot fleet)
 // Pool telemetry, bot trails and claim positions are SIMULATED for the
 // console demo; the badge in the top bar says so. No salvage has run on
@@ -14,12 +14,25 @@ import type { Bot, BotEvent, ClaimPosition, Invariant, Pool } from "./types";
 
 export const CLUSTER = "devnet" as const;
 
+// Program IDs — NS-2 / DR-001 fresh devnet deployment (2026-10-25).
+// Sources: graveyield-protocol docs/DEVNET.md, sdk/src/client.ts constants,
+// and live-cluster verification (getAccountInfo on api.devnet.solana.com:
+// both programs executable, both config PDAs owned by their programs,
+// both bumps 255). The pre-refresh IDs (5JiCVx… / HUyoG5…) are the FROZEN
+// DR-001 static reference — authority key dead, historical only; they must
+// never reappear here (pinned by src/lib/gy/__tests__/programIds.test.ts).
 export const PROGRAM_IDS = {
+  graveScanner: "CuQZesHk8eHvaoNTFiTr1hUjfVKGCqDZHTTe8HkJAo54",
+  graveVault: "Bd5smhQgMrvcRw9j659MNTKySpBJsKZLBKtinCAGs7rg",
+  scannerConfigPda: "Fb6uvYyRAKFRCuab44imZ6YAVAEfGLoAPDxFpwVXQdiD",
+  vaultConfigPda: "hyKk983fguE2CGA5Dx5TLKfBft1AJrm7CHoe1PTUipS",
+  deployedAt: "2026-10-25",
+} as const;
+
+/** The frozen DR-001 static-reference deployment — must stay obsolete. */
+export const RETIRED_PROGRAM_IDS = {
   graveScanner: "5JiCVxES6RYcrFGnFkqKyDmr7fc3EkYaSCbfgJq7zvNF",
   graveVault: "HUyoG5vUmYZJDjdBCxRLLAfm98vEXh63WL3pLARox3v6",
-  scannerConfigPda: "GcdZJhCpg7sjgEEHTsoSkT2Pi83d8kP3NrTqdvMm2Bhu",
-  vaultConfigPda: "2SCqqpEwKMuWnJWe7UQJTzFeDPif4jUPUspWKZdZ5vaU",
-  deployedAt: "2026-10-09",
 } as const;
 
 /** ProtocolConfig defaults (spec §4 + D-sets). */

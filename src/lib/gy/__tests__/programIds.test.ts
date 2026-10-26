@@ -77,10 +77,14 @@ describe("PROGRAM_IDS — NS-2 devnet deployment", () => {
     expect(RETIRED_PROGRAM_IDS.graveScanner).toBe(RETIRED.graveScanner);
     expect(RETIRED_PROGRAM_IDS.graveVault).toBe(RETIRED.graveVault);
     // Negative guards: the live constants must never drift back.
-    expect(PROGRAM_IDS.graveScanner).not.toBe(RETIRED.graveScanner);
-    expect(PROGRAM_IDS.graveVault).not.toBe(RETIRED.graveVault);
-    expect(PROGRAM_IDS.scannerConfigPda).not.toBe("GcdZJhCpg7sjgEEHTsoSkT2Pi83d8kP3NrTqdvMm2Bhu");
-    expect(PROGRAM_IDS.vaultConfigPda).not.toBe("2SCqqpEwKMuWnJWe7UQJTzFeDPif4jUPUspWKZdZ5vaU");
-    expect(PROGRAM_IDS.deployedAt).not.toBe("2026-10-09");
+    // String-typed locals: the pinned constants are `as const` literals.
+    const liveScanner: string = PROGRAM_IDS.graveScanner;
+    const liveVault: string = PROGRAM_IDS.graveVault;
+    const liveDeployedAt: string = PROGRAM_IDS.deployedAt;
+    expect(liveScanner).not.toBe(RETIRED.graveScanner);
+    expect(liveVault).not.toBe(RETIRED.graveVault);
+    expect(liveScanner).not.toBe("GcdZJhCpg7sjgEEHTsoSkT2Pi83d8kP3NrTqdvMm2Bhu");
+    expect(liveVault).not.toBe("2SCqqpEwKMuWnJWe7UQJTzFeDPif4jUPUspWKZdZ5vaU");
+    expect(liveDeployedAt).not.toBe("2026-10-09");
   });
 });
