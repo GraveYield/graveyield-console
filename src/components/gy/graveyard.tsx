@@ -43,7 +43,8 @@ import {
 import { CriteriaChips, SectionHead, ToneBadge, CopyChip, criterionTone, useNow } from "./widgets";
 import type { Pool, PoolState } from "@/lib/gy/types";
 import { criteriaOf, estimateSalvageEconomics, WSOL_MINT } from "@/lib/gy/estimator";
-import { fmtDuration, fmtNum, fmtSol, POOL_STATE_META, shortAddr } from "@/lib/gy/format";
+import { SNAPSHOT, snapshotCriteriaOf } from "@/lib/gy/snapshot";
+import { fmtDuration, fmtNum, fmtSol, fmtUtcClock, POOL_STATE_META, shortAddr } from "@/lib/gy/format";
 import { cn } from "@/lib/utils";
 
 type SortKey = "score" | "tvl" | "inactivity";
@@ -81,7 +82,8 @@ export function Graveyard({
   const { toast } = useToast();
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("score");
+  // Snapshot rows carry no fabricated score — default to sorting by real TVL.
+  const [sortKey, setSortKey] = useState<SortKey>("tvl");
 
   const rows = useMemo(() => {
     const f = FILTERS.find((x) => x.id === filter) ?? FILTERS[0];
@@ -106,6 +108,9 @@ export function Graveyard({
 
   const cycle = (key: SortKey) => setSortKey(key);
 
+  const snapNow = useNow();
+  const snapFresh = snapNow === null ? null : snapNow - SNAPSHOT.generatedAtUnixMs <= SNAPSHOT.freshness.maxAgeMs;
+
   return (
     <div className="animate-fade-up space-y-5">
       <SectionHead
@@ -123,6 +128,24 @@ export function Graveyard({
           </div>
         }
       />
+
+      {/* Data provenance banner — REAL snapshot data, freshness explicit. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-[11.5px] leading-relaxed text-slate-400">
+        <ToneBadge tone={snapFresh === null ? "muted" : snapFresh ? "ok" : "warn"}>
+          {snapFresh === null ? "checking freshness…" : snapFresh ? "snapshot fresh" : "snapshot stale"}
+        </ToneBadge>
+        <span>
+          <span className="font-semibold text-slate-200">Real mainnet Raydium V4 pools</span> — indexer
+          snapshot {SNAPSHOT.counts.enriched} of {SNAPSHOT.counts.supportedWsolPairs} WSOL-supported pools
+          enriched · generated {fmtUtcClock(new Date(SNAPSHOT.generatedAtUnixMs))} UTC · slots
+          {" "}{SNAPSHOT.provenance.slotLowerBound.toLocaleString()}–{SNAPSHOT.provenance.slotUpperBound.toLocaleString()}
+        </span>
+        {SNAPSHOT.failures.length > 0 && (
+          <span className="text-slate-500">
+            · {SNAPSHOT.failures.length} field(s) unavailable (recorded per pool, shown as “unavailable”)
+          </span>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Filter pools">
         {FILTERS.map((f) => (
@@ -285,7 +308,9 @@ function StateBadge({ state }: { state: PoolState }) {
 
 function CriteriaRow({ pool }: { pool: Pool }) {
   const now = Date.now();
-  const criteria = criteriaOf(pool, now);
+  const criteria = pool.snapshotCriteria
+    ? snapshotCriteriaOf(pool, now, SNAPSHOT)
+    : criteriaOf(pool, now);
   return <CriteriaChips criteria={criteria} />;
 }
 
@@ -302,7 +327,13 @@ function PoolSheet({
   toast: ReturnType<typeof useToast>["toast"];
 }) {
   const now = useNow();
-  const criteria = useMemo(() => criteriaOf(pool, now ?? Date.now()), [pool, now]);
+  const criteria = useMemo(
+    () =>
+      pool.snapshotCriteria
+        ? snapshotCriteriaOf(pool, now ?? Date.now(), SNAPSHOT)
+        : criteriaOf(pool, now ?? Date.now()),
+    [pool, now],
+  );
   const [lpPct, setLpPct] = useState([100]);
   const [slippageOverride, setSlippageOverride] = useState<number>(300);
 
@@ -402,6 +433,59 @@ function PoolSheet({
         </div>
 
         <div className="space-y-6 px-5 py-5">
+          {/* Live evidence — real snapshot facts + provenance (P3-A). */}
+          {pool.snapshotReserves && pool.snapshotMeta && (
+            <section>
+              <SheetSectionTitle icon={FlaskConical}>Live evidence (indexer snapshot)</SheetSectionTitle>
+              <Card className="border-white/8">
+                <CardContent className="space-y-1.5 p-4 font-mono text-xs">
+                  <Row
+                    k="WSOL reserve (vault)"
+                    v={`${fmtSol(pool.quoteReserveLamports)} SOL`}
+                    strong
+                  />
+                  <Row
+                    k="memecoin reserve (vault)"
+                    v={`${pool.snapshotReserves.memecoinReserveRaw} raw · ${pool.baseDecimals} decimals`}
+                  />
+                  <Row k="LP supply" v={`${pool.snapshotReserves.lpSupplyRaw} raw`} />
+                  <Row
+                    k="last swap"
+                    v={
+                      pool.snapshotReserves.lastSwap
+                        ? `${fmtUtcClock(new Date(pool.snapshotReserves.lastSwap.unixTs * 1000))} UTC (slot ${pool.snapshotReserves.lastSwap.slot.toLocaleString()})`
+                        : "unavailable — not derivable in this run"
+                    }
+                  />
+                  <div className="my-1.5 border-t border-white/8" />
+                  <Row
+                    k="fetched at"
+                    v={`${fmtUtcClock(new Date(pool.snapshotMeta.fetchedAtUnixMs))} UTC`}
+                  />
+                  <Row
+                    k="artifact generated"
+                    v={`${fmtUtcClock(new Date(pool.snapshotMeta.generatedAtUnixMs))} UTC · stale after ${fmtDuration(pool.snapshotMeta.maxAgeMs)}`}
+                  />
+                  <Row
+                    k="cluster / source"
+                    v={`${SNAPSHOT.cluster} · ${SNAPSHOT.provenance.endpointKind} · ${SNAPSHOT.provenance.source}`}
+                  />
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-slate-500">account fingerprint (sha256)</span>
+                    <span className="truncate font-mono text-[10.5px] text-slate-400">
+                      {pool.snapshotFingerprint ? shortAddr(pool.snapshotFingerprint, 10, 8) : "—"}
+                    </span>
+                  </div>
+                  {pool.snapshotFingerprint && (
+                    <div className="pt-1">
+                      <CopyChip text={pool.snapshotFingerprint} label="Copy account fingerprint" />
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </section>
+          )}
+
           {/* Lifecycle stepper */}
           <section>
             <SheetSectionTitle icon={Hourglass}>Lifecycle position</SheetSectionTitle>

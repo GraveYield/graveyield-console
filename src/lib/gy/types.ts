@@ -48,6 +48,35 @@ export interface Pool {
   certExpiresAt: number | null;
   anchorInvalidated?: boolean;
   note?: string;
+  /** Data provenance (P3-A): set when this row comes from the indexer snapshot. */
+  dataSource?: DataState;
+  /** Snapshot-backed criteria states — present only on snapshot rows. */
+  snapshotCriteria?: SnapshotPoolCriteria;
+  /** sha256 fingerprint of the pool account payload behind this row. */
+  snapshotFingerprint?: string;
+  /** Artifact provenance: generated-at (unix ms) + freshness budget (ms). */
+  snapshotMeta?: { generatedAtUnixMs: number; maxAgeMs: number; fetchedAtUnixMs: number };
+  /** Reserve detail as exact raw strings from the snapshot (no display rounding). */
+  snapshotReserves?: {
+    wsolReserveLamports: string;
+    memecoinReserveRaw: string;
+    lpSupplyRaw: string;
+    lastSwap: { unixTs: number; slot: number; signature: string } | null;
+  };
+}
+
+/** Data-state vocabulary used across the console (P3-A). */
+export type DataState = "real" | "cached" | "stale" | "unavailable" | "simulated";
+
+/**
+ * Snapshot-backed criteria states (P3-A): the indexer can only evaluate C1
+ * (inactivity age) and C3 (WSOL reserve floor) from on-chain facts. C2 needs
+ * an attested launch price, C4 an original-supply baseline, C5 locker
+ * adapters (LOCKER-002), C6 anchor epochs — those stay "pending" upstream.
+ */
+export interface SnapshotPoolCriteria {
+  c1Inactivity: "pass" | "fail" | "pending";
+  c3MinTvl: "pass" | "fail" | "pending";
 }
 
 export interface Bot {

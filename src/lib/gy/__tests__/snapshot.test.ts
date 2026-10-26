@@ -72,9 +72,12 @@ describe("snapshot loader — committed artifact", () => {
     expect(pool.score).toBe(0);
     expect(pool.anchorEpoch).toBeNull();
     expect(pool.certExpiresAt).toBeNull();
-    // Criteria honesty rides along.
-    expect(pool.snapshotCriteria.c1Inactivity).toBe(SNAPSHOT.pools[0].criteria.c1Inactivity);
-    expect(pool.snapshotCriteria.c4LpBurned).toBe("pending");
+    // Criteria honesty rides along (C1/C3 states on the Pool; the full
+    // pending-pinned criteria remain on the snapshot record).
+    expect(pool.snapshotCriteria!.c1Inactivity).toBe(SNAPSHOT.pools[0]!.criteria.c1Inactivity);
+    expect(pool.snapshotCriteria!.c3MinTvl).toBe(SNAPSHOT.pools[0]!.criteria.c3MinTvl);
+    expect(SNAPSHOT.pools[0]!.criteria.c4LpBurned).toBe("pending");
+    expect(SNAPSHOT.pools[0]!.criteria.c5LpLocked).toBe("pending");
   });
 
   test("lastSwap unavailable maps to 0 with an explanatory note — never as a real zero", () => {

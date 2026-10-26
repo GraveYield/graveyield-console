@@ -19,7 +19,7 @@
 //     value so a future index cannot quietly invent evaluations.
 
 import { shortAddr } from "./format";
-import type { Pool } from "./types";
+import type { Criterion, Pool } from "./types";
 import rawSnapshot from "./snapshot.json";
 
 export type DataState = "real" | "cached" | "stale" | "unavailable" | "simulated";
@@ -270,7 +270,7 @@ export const RAW_SNAPSHOT: unknown = rawSnapshot;
  * snapshot-mode views must sort by real quantities (TVL, last activity).
  * C2/C4/C5/C6 ride along as pending via `snapshotCriteria`.
  */
-export function poolFromSnapshot(p: SnapshotPool, snap: ConsoleSnapshot): Pool & { dataSource: DataState; snapshotCriteria: SnapshotCriteria; snapshotFingerprint: string } {
+export function poolFromSnapshot(p: SnapshotPool, snap: ConsoleSnapshot): Pool {
   const lpSupplyBig = BigInt(p.lpSupplyRaw);
   if (lpSupplyBig > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new SnapshotError(`pool ${p.address}: lpSupplyRaw exceeds JS safe-integer range`);
@@ -300,12 +300,93 @@ export function poolFromSnapshot(p: SnapshotPool, snap: ConsoleSnapshot): Pool &
     certExpiresAt: null,
     note,
     dataSource: snapshotDataState(snap, Date.now()),
-    snapshotCriteria: p.criteria,
+    snapshotCriteria: { c1Inactivity: p.criteria.c1Inactivity, c3MinTvl: p.criteria.c3MinTvl },
     snapshotFingerprint: p.fingerprint,
+    snapshotMeta: {
+      generatedAtUnixMs: snap.generatedAtUnixMs,
+      maxAgeMs: snap.freshness.maxAgeMs,
+      fetchedAtUnixMs: p.fetchedAtUnixMs,
+    },
+    snapshotReserves: {
+      wsolReserveLamports: p.wsolReserveLamports,
+      memecoinReserveRaw: p.memecoinReserveRaw,
+      lpSupplyRaw: p.lpSupplyRaw,
+      lastSwap: p.lastSwap,
+    },
   };
 }
 
 /** All snapshot pools mapped to UI pools, in the artifact's canonical order. */
-export function snapshotPools(snap: ConsoleSnapshot): Array<ReturnType<typeof poolFromSnapshot>> {
+export function snapshotPools(snap: ConsoleSnapshot): Pool[] {
   return snap.pools.map((p) => poolFromSnapshot(p, snap));
+}
+
+/**
+ * Six-criteria rows for snapshot pools. Mirrors estimator.criteriaOf()'s
+ * shape and thresholds, but the states come from the snapshot's honest
+ * evaluation: C1/C3 as derived upstream, C2/C4/C5/C6 always "pending".
+ */
+export function snapshotCriteriaOf(pool: Pool, now: number, snap: ConsoleSnapshot): Criterion[] {
+  const sc = pool.snapshotCriteria;
+  if (!sc) throw new SnapshotError("snapshotCriteriaOf requires a snapshot-backed pool");
+  const inactivityDays = Number(BigInt(snap.thresholds.inactivitySeconds) / 86_400n);
+  const minTvlSol = Number(BigInt(snap.thresholds.minTvlLamports)) / 1e9;
+  const daysSinceSwap =
+    pool.lastSwapUnix > 0 ? Math.floor((now - pool.lastSwapUnix * 1000) / 86_400_000) : null;
+  return [
+    {
+      id: "C1",
+      name: "Trading inactivity",
+      detail:
+        "≥ 90 days since last swap. Evidence: indexer-derived from Raydium V4 history in the snapshot — the oracle-signed attestation is a later pipeline step.",
+      threshold: `≥ ${inactivityDays} days`,
+      state: sc.c1Inactivity,
+      value: daysSinceSwap === null ? "unavailable" : `${daysSinceSwap} days`,
+    },
+    {
+      id: "C2",
+      name: "Price collapse from launch",
+      detail:
+        "Requires the oracle-attested launch price (init-once LaunchPrice PDA). Not derivable from this snapshot — pending, never estimated.",
+      threshold: "≥ 9,900 bps",
+      state: "pending",
+      value: "not attested",
+    },
+    {
+      id: "C3",
+      name: "Minimum residual TVL",
+      detail:
+        "Quote-side (WSOL) vault balance must still clear the floor. Snapshot value read live from the pool's vault token account.",
+      threshold: `≥ ${minTvlSol} SOL`,
+      state: sc.c3MinTvl,
+      value: `${Number(pool.quoteReserveLamports) / 1e9} SOL`,
+    },
+    {
+      id: "C4",
+      name: "LP supply not burned",
+      detail:
+        "Requires the original-supply baseline / burn-dust comparison. Snapshot carries the raw LP supply only — pending, never guessed.",
+      threshold: "supply > dust threshold",
+      state: "pending",
+      value: `${pool.lpSupply.toLocaleString()} LP (raw)`,
+    },
+    {
+      id: "C5",
+      name: "No locked LP",
+      detail:
+        "Requires locker introspection (UNCX marker PDA) — LOCKER-002 keeps off-chain locker evidence out of v1. Pending.",
+      threshold: "no locks",
+      state: "pending",
+      value: "not introspected",
+    },
+    {
+      id: "C6",
+      name: "Multi-epoch confirmation",
+      detail:
+        "Requires an on-chain EligibilityAnchor epoch gap (Phase 1 → Phase 2). No anchor exists for a discovered pool — pending.",
+      threshold: "≥ 2 epochs",
+      state: "pending",
+      value: "no anchor",
+    },
+  ];
 }

@@ -13,6 +13,7 @@ import {
   INITIAL_EVENTS,
   resolvePools,
 } from "@/lib/gy/data";
+import { SNAPSHOT, snapshotPools } from "@/lib/gy/snapshot";
 import type { BotEvent, Pool } from "@/lib/gy/types";
 import { fmtUtcClock } from "@/lib/gy/format";
 
@@ -29,6 +30,10 @@ export default function GraveYieldConsole() {
     const raf = requestAnimationFrame(() => setPools(resolvePools()));
     return () => cancelAnimationFrame(raf);
   }, []);
+
+  /* Graveyard runs on the REAL indexer snapshot (P3-A) — provenance-backed,
+     fail-closed at module load. Static artifact → hydration-safe. */
+  const graveyardPools = useMemo(() => snapshotPools(SNAPSHOT), []);
 
   /* Streaming fleet feed — the Scout bridge feeding the Monitor. */
   useEffect(() => {
@@ -54,14 +59,14 @@ export default function GraveYieldConsole() {
   );
 
   const selected = selectedAddr
-    ? (pools.find((p) => p.address === selectedAddr) ?? null)
+    ? (graveyardPools.find((p) => p.address === selectedAddr) ?? null)
     : null;
 
   return (
     <Shell active={view} onSelect={(v) => setView(v)}>
       {view === "overview" && <Overview pools={pools} events={events} />}
       {view === "graveyard" && (
-        <Graveyard pools={pools} selected={selected} onSelect={(p) => setSelectedAddr(p?.address ?? null)} />
+        <Graveyard pools={graveyardPools} selected={selected} onSelect={(p) => setSelectedAddr(p?.address ?? null)} />
       )}
       {view === "fleet" && <Fleet bots={bots} />}
       {view === "claims" && <Claims />}

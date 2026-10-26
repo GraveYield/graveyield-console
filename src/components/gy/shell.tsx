@@ -336,7 +336,7 @@ function TopBar() {
             tone="warn"
             className="hidden sm:inline-flex"
           >
-            Simulated telemetry
+            Mixed data — per-view labels: Graveyard real (snapshot), fleet/claims simulated
           </ToneBadge>
           <WalletButton />
         </div>
