@@ -5,6 +5,32 @@ Commit identity convention: all GraveYield engineering commits are authored as s
 
 ## [Unreleased]
 
+### Hygiene + honesty — 2026-10-30 (P4.1 Step 0: audit remediation, owner-approved)
+
+Charter: fix Phase 4.0 audit findings without touching protocol economics, eligibility thresholds, estimator economics, or any transaction behavior. No signing or submission path was added; the app remains read-only plus dry-run toasts.
+
+Changes:
+
+- **Graveyard honesty fix (audit D2)** — the desktop table's Idle and Collapse cells rendered unavailable data as values:
+  - Idle: `lastSwapUnix === 0` (indexer recorded an activity-derivation failure; 11 of 12 committed snapshot pools) rendered as a fabricated ~20,754d. Now renders `unavailable` via `formatIdleDaysCell`.
+  - Idle: the cell subtracted unix **seconds** from `Date.now()` (ms), inflating the one real snapshot row (`1_759_460_872` → ~20,715d instead of the correct 392d). Fixed by the same formatter.
+  - Collapse: snapshot rows pin `collapseBps` to 0 while C2 is pending upstream; the cell rendered a fabricated `0.0%`. Now renders `—` for pending rows via `formatCollapseCell`.
+  - `resolvePools()` (fixture layer) emitted **milliseconds** for `lastSwapUnix`, violating the documented `Pool` contract (unix seconds) that `estimator.criteriaOf` relies on — C1 silently evaluated as fail for every simulated row. Resolver now emits seconds; a contract test pins the unit.
+  - Display decisions centralized in two pure, unit-tested formatters; six regression tests added (45 → 51). The pool detail sheet already handled both cases correctly and is unchanged.
+- **Dead-dependency removal (audit D3)** — 35 of 85 `dependencies` entries removed after verifying zero references across the compiled tree, all configs, and build scripts (template leftovers such as `next-auth`, `next-intl`, `zustand`, `@tanstack/*`, `@mdxeditor/editor`, `@dnd-kit/*`, `framer-motion`, `react-markdown`, `react-syntax-highlighter`; plus hoisted transitive-name entries whose kept consumers remain covered by the untouched `overrides` block). Kept deliberately: `sharp` (`next/image` is used; prod image optimization), `postcss` (build chain + override target), and every package imported by a compiled shadcn/ui primitive. `bun audit` remains at **0 findings**; full gate re-run green (typecheck, lint, 51 tests, production build).
+- **CI job-header comment corrected (audit D1 disposition)** — the `verify` job header still claimed "there is no unit test battery here — the production build IS the test", contradicting the `bun test` step in the same job (the battery exists since P3-A). Comment-only change.
+  - Audit-record correction: the Phase 4.0 audit also reported the CI branch filters as corrupted (`branches: ain]`). Re-verification against the git object store shows the committed filters are correct (`branches: [main]`); the reported corruption was an audit-observation artifact, not a repository defect. No workflow trigger change was needed or made.
+- **Documentation accuracy (audit D4)** — README updated to describe per-view data honesty (live pulse; real committed snapshot artifact with manual refresh; simulated fleet/claims/KPIs/actions), the lib/gy layer inventory, the unit-test battery in the dev commands, and `grave-indexer` in the related-repos list. Claims are scoped to what exists: no artifact-transport, fleet-ingestion, claims-integration, or transaction capability is asserted.
+
+### Data integration — 2026-10-26 (P3-A backfill — documentation only; code shipped in commit 8d9dc3e)
+
+Backfilling the changelog for the P3-A integration tasks that shipped without a changelog entry:
+
+- **3.1 Snapshot artifact + fail-closed loader**: `src/lib/gy/snapshot.json` — a committed `ConsoleSnapshotV1` artifact produced by `grave-indexer console-snapshot` (real mainnet Raydium V4 corpus; 12 of 118 supported WSOL pairs enriched; provenance, slot bounds, freshness budget, recorded per-pool failures), parsed by `src/lib/gy/snapshot.ts` with exhaustive validation (schema key-set, u64-as-decimal-string, base58, count consistency, honest pending-pinned C2/C4/C5/C6) that throws at module load on any violation. Missing activity renders as unavailable-with-note, never zero.
+- **3.2 Program-ID guard**: `programIds.test.ts` pins the NS-2 devnet program IDs (GraveScanner `CuQZ…Ao54`, GraveVault `Bd5s…s7rg`), independently re-derives both `protocol_config` PDAs (bump 255), and negative-pins the retired DR-001 identities.
+- **3.3 Live protocol pulse**: `src/lib/gy/protocolLive.ts` — raw devnet JSON-RPC `getAccountInfo` for both programs and their `ProtocolConfig` PDAs, Anchor-discriminator-checked, byte-exact hand-rolled decoders pinned by `protocolLive.test.ts`, fail-soft per program (unavailable is never substituted with defaults).
+- **3.5 Structural freshness validation** (HEAD commit): `snapshot.test.ts` pins `generatedAtUnixMs` skew bounds, the exact 24 h `maxAgeMs` budget, and per-pool fetch-time ordering.
+
 ### Build + reliability — 2026-10-25 (Phase 1: type gate enforced, first CI, template cleanup)
 
 Charter: stabilize build and test workflows without changing product behavior or weakening security controls. No UI, economic-estimate, or security behavior was modified — TypeScript-level fixes only (type target, icon alias, branded wallet name), plus removal of verified-dead template scaffolding.
