@@ -5,6 +5,19 @@ Commit identity convention: all GraveYield engineering commits are authored as s
 
 ## [Unreleased]
 
+### Snapshot artifact transport + live data integration — 2026-10-31 (P4.1 Step 1)
+
+The Graveyard no longer renders the build-time committed artifact; it reads a server-resolved snapshot source with an explicit, test-pinned four-state contract. Still devnet-operations-only: no transaction path was added, and nothing implies automatic real-time ingestion.
+
+- **`/api/gy/snapshot` route** (`src/app/api/gy/snapshot/route.ts`) — `force-dynamic` + `Cache-Control: no-store`; answers `200` in every state with the state machine carried in the payload envelope. Pull-only: no polling, no artifact writes, no push acceptance.
+- **Source resolution** (`src/lib/gy/snapshotSource.ts`) — answers the Phase 4.0 deployment question: `GY_SNAPSHOT_URL` (HTTPS artifact store — the supported topology for serverless deploys, which cannot assume a persistent local directory of indexer output) or `GY_SNAPSHOT_PATH` (indexer output volume, self-hosted). Exactly one source may be set: neither → `missing` / `NO_SOURCE_CONFIGURED` (a first-class honest state), both → `missing` / `SOURCE_CONFLICT`. 8 MiB transport cap, 10 s fetch timeout, credential-redacted diagnostics (URL userinfo/query are never echoed). Transport-level failures map to `missing`; contract-level rejections (invalid JSON, schema violations, fabricated criteria, non-u64 fields, future-dated `generatedAt`, oversize) map to `corrupt` — neither can ever carry `dataState: "real"`.
+- **Contract/artifact split** — the fail-closed parser, freshness math and UI mapping moved to `snapshotContract.ts` (isomorphic, artifact-free); `snapshot.ts` re-exports them and binds the committed `snapshot.json`, which remains the contract test seed and a documented local-development source. Client code no longer pulls the committed artifact into its bundle.
+- **Client hydration gate** (`src/lib/gy/snapshotTransport.ts`) — the browser re-validates every route payload through the same parser and enforces envelope consistency: `dataState` must equal the honest mapping of `artifactState`, failed states must carry no payload, and the staleness verdict must match the artifact's own budget. A stale or invalid artifact presented as fresh is structurally impossible (two independent applications of the same fail-closed contract).
+- **Graveyard rewiring** — four-state provenance banner (fresh / stale / unavailable / corrupt) with the server checked-at time, age-vs-budget for stale, the route's diagnostic reason for failures, and a manual **Refresh** button ("manual — no auto-polling"). Without a contract-clean artifact the view renders a withheld-data state with fix-it instructions instead of a table; the pool detail sheet now consumes the route-served snapshot.
+- **Tests** — new transport battery (`snapshotTransport.test.ts`, 34 tests; suite 51 → 85) proving the delivery mechanism end to end in both topologies, including the committed artifact (real past-budget bytes) classifying `stale` through resolver, route and hydration; an invariant sweep asserting `dataState === "real"` ⟺ `artifactState === "valid"`; staleness boundary, oversize, credential-redaction and route-handler cases.
+- **Docs** — `docs/snapshot-transport.md` (the artifact delivery runbook: topologies, state machine, operator runbooks, explicit out-of-scope), `.env.example`, README accuracy updates.
+- Unchanged by design: protocol economics, eligibility thresholds, estimator math, criteria honesty (C2/C4/C5/C6 pending-pinned), and the read-only/dry-run posture of every view.
+
 ### Hygiene + honesty — 2026-10-30 (P4.1 Step 0: audit remediation, owner-approved)
 
 Charter: fix Phase 4.0 audit findings without touching protocol economics, eligibility thresholds, estimator economics, or any transaction behavior. No signing or submission path was added; the app remains read-only plus dry-run toasts.

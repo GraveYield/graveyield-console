@@ -36,6 +36,7 @@ import {
   FlaskConical,
   Hourglass,
   PlayCircle,
+  RefreshCw,
   Rocket,
   Search,
   Timer,
@@ -43,7 +44,8 @@ import {
 import { CriteriaChips, SectionHead, ToneBadge, CopyChip, criterionTone, useNow } from "./widgets";
 import type { Pool, PoolState } from "@/lib/gy/types";
 import { criteriaOf, estimateSalvageEconomics, WSOL_MINT } from "@/lib/gy/estimator";
-import { SNAPSHOT, snapshotCriteriaOf } from "@/lib/gy/snapshot";
+import { snapshotCriteriaOf, type ConsoleSnapshot } from "@/lib/gy/snapshotContract";
+import type { SnapshotTransportPayload } from "@/lib/gy/snapshotTransport";
 import { fmtDuration, fmtNum, fmtSol, fmtUtcClock, formatCollapseCell, formatIdleDaysCell, POOL_STATE_META, shortAddr } from "@/lib/gy/format";
 import { cn } from "@/lib/utils";
 
@@ -72,10 +74,22 @@ const EPOCHS_NOW = 713;
 
 export function Graveyard({
   pools,
+  snapshot,
+  transport,
+  transportLoading,
+  transportError,
+  refreshing,
+  onRefresh,
   selected,
   onSelect,
 }: {
   pools: Pool[];
+  snapshot: ConsoleSnapshot | null;
+  transport: SnapshotTransportPayload | null;
+  transportLoading: boolean;
+  transportError: "unreachable" | "malformed" | null;
+  refreshing: boolean;
+  onRefresh: () => void;
   selected: Pool | null;
   onSelect: (p: Pool | null) => void;
 }) {
@@ -108,44 +122,60 @@ export function Graveyard({
 
   const cycle = (key: SortKey) => setSortKey(key);
 
-  const snapNow = useNow();
-  const snapFresh = snapNow === null ? null : snapNow - SNAPSHOT.generatedAtUnixMs <= SNAPSHOT.freshness.maxAgeMs;
+  const searchBox = (
+    <div className="relative w-full sm:w-64">
+      <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+      <Input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search symbol or pool address"
+        className="border-white/10 bg-white/5 pl-8 font-mono text-xs placeholder:text-slate-600"
+        aria-label="Search pools"
+      />
+    </div>
+  );
+
+  /* Fail-closed, no-fabrication: without a contract-clean artifact there is
+     no pool data at all — the view renders the transport's honest state and
+     a fix-it hint instead of a table. */
+  if (!snapshot) {
+    return (
+      <div className="animate-fade-up space-y-5">
+        <SectionHead title="Graveyard" right={searchBox} />
+        <TransportBanner
+          transport={transport}
+          loading={transportLoading}
+          error={transportError}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+        />
+        <Card className="glass-panel border-white/8 p-10 text-center">
+          <p className="text-sm text-muted-foreground">
+            No snapshot artifact is being served — pool data is withheld (fail-closed).
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-slate-500">
+            Configure one artifact source — GY_SNAPSHOT_URL (HTTPS artifact store, serverless) or
+            GY_SNAPSHOT_PATH (indexer output volume, self-hosted). See docs/snapshot-transport.md,
+            then use Refresh.
+          </p>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade-up space-y-5">
-      <SectionHead
-        title="Graveyard"
-        right={
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search symbol or pool address"
-              className="border-white/10 bg-white/5 pl-8 font-mono text-xs placeholder:text-slate-600"
-              aria-label="Search pools"
-            />
-          </div>
-        }
-      />
+      <SectionHead title="Graveyard" right={searchBox} />
 
-      {/* Data provenance banner — REAL snapshot data, freshness explicit. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-[11.5px] leading-relaxed text-slate-400">
-        <ToneBadge tone={snapFresh === null ? "muted" : snapFresh ? "ok" : "warn"}>
-          {snapFresh === null ? "checking freshness…" : snapFresh ? "snapshot fresh" : "snapshot stale"}
-        </ToneBadge>
-        <span>
-          <span className="font-semibold text-slate-200">Real mainnet Raydium V4 pools</span> — indexer
-          snapshot {SNAPSHOT.counts.enriched} of {SNAPSHOT.counts.supportedWsolPairs} WSOL-supported pools
-          enriched · generated {fmtUtcClock(new Date(SNAPSHOT.generatedAtUnixMs))} UTC · slots
-          {" "}{SNAPSHOT.provenance.slotLowerBound.toLocaleString()}–{SNAPSHOT.provenance.slotUpperBound.toLocaleString()}
-        </span>
-        {SNAPSHOT.failures.length > 0 && (
-          <span className="text-slate-500">
-            · {SNAPSHOT.failures.length} field(s) unavailable (recorded per pool, shown as “unavailable”)
-          </span>
-        )}
-      </div>
+      {/* Data provenance banner — REAL snapshot data, four artifact states,
+          freshness explicit, manual refresh only. */}
+      <TransportBanner
+        transport={transport}
+        loading={transportLoading}
+        error={transportError}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+      />
 
       <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Filter pools">
         {FILTERS.map((f) => (
@@ -225,7 +255,7 @@ export function Graveyard({
                       <StateBadge state={p.state} />
                     </td>
                     <td className="px-4 py-3">
-                      <CriteriaRow pool={p} />
+                      <CriteriaRow pool={p} snapshot={snapshot} />
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-[13px] tabular-nums text-slate-200">
                       {fmtSol(p.quoteReserveLamports, 2)}
@@ -274,7 +304,7 @@ export function Graveyard({
               <StateBadge state={p.state} />
             </div>
             <div className="mt-3 flex items-center justify-between gap-2">
-              <CriteriaRow pool={p} />
+              <CriteriaRow pool={p} snapshot={snapshot} />
               <span className="font-mono text-xs tabular-nums text-slate-400">
                 {fmtSol(p.quoteReserveLamports, 2)} SOL
               </span>
@@ -289,8 +319,14 @@ export function Graveyard({
         </Card>
       )}
 
-      {selected && (
-        <PoolSheet pool={selected} open={!!selected} onClose={() => onSelect(null)} toast={toast} />
+      {selected && snapshot && (
+        <PoolSheet
+          pool={selected}
+          snapshot={snapshot}
+          open={!!selected}
+          onClose={() => onSelect(null)}
+          toast={toast}
+        />
       )}
     </div>
   );
@@ -305,10 +341,129 @@ function StateBadge({ state }: { state: PoolState }) {
   );
 }
 
-function CriteriaRow({ pool }: { pool: Pool }) {
+/* ── Snapshot transport banner (P4.1 Step 1) ────────────────────
+   Four explicit artifact states — valid / stale / missing / corrupt.
+   Stale, missing and corrupt data can never present as fresh: the
+   badge says which state is served, and missing/corrupt carry the
+   route's diagnostic reason. Manual refresh only — the console
+   never polls the indexer. */
+function TransportBanner({
+  transport,
+  loading,
+  error,
+  refreshing,
+  onRefresh,
+}: {
+  transport: SnapshotTransportPayload | null;
+  loading: boolean;
+  error: "unreachable" | "malformed" | null;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  const state = loading
+    ? { tone: "muted" as const, label: "checking snapshot…" }
+    : error === "unreachable"
+      ? { tone: "bad" as const, label: "snapshot transport unreachable" }
+      : error === "malformed"
+        ? { tone: "bad" as const, label: "transport payload rejected" }
+        : transport === null
+          ? { tone: "muted" as const, label: "checking snapshot…" }
+          : transport.artifactState === "valid"
+            ? { tone: "ok" as const, label: "snapshot fresh" }
+            : transport.artifactState === "stale"
+              ? { tone: "warn" as const, label: "snapshot stale" }
+              : transport.artifactState === "missing"
+                ? { tone: "warn" as const, label: "snapshot unavailable" }
+                : { tone: "bad" as const, label: "snapshot corrupt" };
+
+  const checkedAt =
+    transport === null ? null : (
+      <>checked {fmtUtcClock(new Date(transport.checkedAtUnixMs))} UTC</>
+    );
+
+  let detail: React.ReactNode = null;
+  if (!loading && error === null && transport !== null) {
+    const s = transport.snapshot;
+    if (transport.artifactState === "valid" && s) {
+      detail = (
+        <span>
+          <span className="font-semibold text-slate-200">Real mainnet Raydium V4 pools</span> — indexer
+          snapshot {s.counts.enriched} of {s.counts.supportedWsolPairs} WSOL-supported pools enriched ·
+          generated {fmtUtcClock(new Date(s.generatedAtUnixMs))} UTC · slots{" "}
+          {s.provenance.slotLowerBound.toLocaleString()}–{s.provenance.slotUpperBound.toLocaleString()}
+          {checkedAt !== null && (
+            <>
+              {' '}· {checkedAt}
+            </>
+          )}
+          {s.failures.length > 0 && (
+            <span className="text-slate-500">
+              {' '}· {s.failures.length} field(s) unavailable (recorded per pool, shown as “unavailable”)
+            </span>
+          )}
+        </span>
+      );
+    } else if (transport.artifactState === "stale") {
+      detail = (
+        <span>
+          <span className="font-semibold text-amber-200">Real but stale</span> — artifact age{" "}
+          {transport.ageMs !== null ? fmtDuration(transport.ageMs) : "unknown"} exceeds its{" "}
+          {transport.maxAgeMs !== null ? fmtDuration(transport.maxAgeMs) : "24h"} freshness budget.
+          Figures remain labeled stale — never presented as fresh.
+          {checkedAt !== null && (
+            <>
+              {' '}· {checkedAt}
+            </>
+          )}
+        </span>
+      );
+    } else {
+      // missing | corrupt — the route's reason is the diagnostic surface.
+      detail = (
+        <span>
+          {transport.reason ?? "No artifact available."}
+          {checkedAt !== null && (
+            <>
+              {' '}· {checkedAt}
+            </>
+          )}
+          {' '}·{' '}
+          <span className="text-slate-500">
+            source: {transport.source.kind === "none" ? "none configured" : `${transport.source.kind} ${transport.source.uri ?? ""}`}
+          </span>
+        </span>
+      );
+    }
+  } else if (error === "unreachable") {
+    detail = <span>The console could not reach /api/gy/snapshot — the snapshot transport itself is down. Retry with Refresh.</span>;
+  } else if (error === "malformed") {
+    detail = <span>The transport payload failed client-side re-validation (fail-closed) — treated as unavailable. Retry with Refresh.</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-[11.5px] leading-relaxed text-slate-400">
+      <ToneBadge tone={state.tone}>{state.label}</ToneBadge>
+      {detail}
+      <Button
+        variant="outline"
+        size="sm"
+        className="ml-auto min-h-8 shrink-0 border-white/10 bg-white/[0.04] px-3 text-xs text-slate-300 hover:bg-white/10 hover:text-foreground"
+        onClick={onRefresh}
+        disabled={refreshing || loading}
+        aria-label="Manually refresh snapshot"
+      >
+        <RefreshCw className={`h-3.5 w-3.5${refreshing ? " animate-spin" : ""}`} />
+        Refresh
+      </Button>
+      <span className="text-[10.5px] text-slate-600">manual — no auto-polling</span>
+    </div>
+  );
+}
+
+function CriteriaRow({ pool, snapshot }: { pool: Pool; snapshot: ConsoleSnapshot }) {
   const now = Date.now();
   const criteria = pool.snapshotCriteria
-    ? snapshotCriteriaOf(pool, now, SNAPSHOT)
+    ? snapshotCriteriaOf(pool, now, snapshot)
     : criteriaOf(pool, now);
   return <CriteriaChips criteria={criteria} />;
 }
@@ -316,11 +471,13 @@ function CriteriaRow({ pool }: { pool: Pool }) {
 /* ── Pool detail sheet ─────────────────────────────────────────── */
 function PoolSheet({
   pool,
+  snapshot,
   open,
   onClose,
   toast,
 }: {
   pool: Pool;
+  snapshot: ConsoleSnapshot;
   open: boolean;
   onClose: () => void;
   toast: ReturnType<typeof useToast>["toast"];
@@ -329,9 +486,9 @@ function PoolSheet({
   const criteria = useMemo(
     () =>
       pool.snapshotCriteria
-        ? snapshotCriteriaOf(pool, now ?? Date.now(), SNAPSHOT)
+        ? snapshotCriteriaOf(pool, now ?? Date.now(), snapshot)
         : criteriaOf(pool, now ?? Date.now()),
-    [pool, now],
+    [pool, now, snapshot],
   );
   const [lpPct, setLpPct] = useState([100]);
   const [slippageOverride, setSlippageOverride] = useState<number>(300);
@@ -467,7 +624,7 @@ function PoolSheet({
                   />
                   <Row
                     k="cluster / source"
-                    v={`${SNAPSHOT.cluster} · ${SNAPSHOT.provenance.endpointKind} · ${SNAPSHOT.provenance.source}`}
+                    v={`${snapshot.cluster} · ${snapshot.provenance.endpointKind} · ${snapshot.provenance.source}`}
                   />
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="text-slate-500">account fingerprint (sha256)</span>
