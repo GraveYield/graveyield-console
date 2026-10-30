@@ -79,18 +79,9 @@ export interface SnapshotPoolCriteria {
   c3MinTvl: "pass" | "fail" | "pending";
 }
 
-export interface Bot {
-  id: string;
-  name: string;
-  pkg: string;
-  role: string;
-  description: string;
-  mode: "dry-run" | "live" | "read-only";
-  status: "nominal" | "standby" | "watching";
-  stats: { label: string; value: string }[];
-  events: BotEvent[];
-}
-
+/** BotEvent feeds the Overview's simulated fleet-activity feed (labeled as
+ * such). The Fleet view does not use it: since P4.3 it renders the real
+ * FLEET_STATE_DIR trails via fleetContract.ts (FleetTrailEvent/FleetAlert). */
 export interface BotEvent {
   id: number;
   ts: string;

@@ -8,7 +8,6 @@ import { Fleet } from "@/components/gy/fleet";
 import { Claims } from "@/components/gy/claims";
 import { Protocol } from "@/components/gy/protocol";
 import {
-  BOTS,
   EVENT_GENERATOR,
   INITIAL_EVENTS,
   resolvePools,
@@ -19,6 +18,11 @@ import {
   resolveDisplayPayload,
   type SnapshotTransportPayload,
 } from "@/lib/gy/snapshotTransport";
+import {
+  hydrateFleetPayload,
+  resolveDisplayFleetPayload,
+  type FleetTransportPayload,
+} from "@/lib/gy/fleetTransport";
 import type { BotEvent, Pool } from "@/lib/gy/types";
 import { fmtUtcClock } from "@/lib/gy/format";
 
@@ -107,8 +111,9 @@ export default function GraveYieldConsole() {
   );
 
   /* Streaming fleet feed — the Scout bridge feeding the Monitor.
-     (Simulated fixture feed for the Overview/Fleet views — unrelated to
-     the snapshot transport, which never auto-polls.) */
+     (Simulated fixture feed for the Overview view only — the Fleet view
+     itself reads the real FLEET_STATE_DIR trails below; neither feed
+     auto-polls its transport.) */
   useEffect(() => {
     const t = setInterval(() => {
       const pick = EVENT_GENERATOR[Math.floor(Math.random() * EVENT_GENERATOR.length)];
@@ -122,18 +127,70 @@ export default function GraveYieldConsole() {
     return () => clearInterval(t);
   }, []);
 
-  const bots = useMemo(
-    () =>
-      BOTS.map((b) => ({
-        ...b,
-        events: events.filter((e) => e.bot === b.id).slice(-4),
-      })),
-    [events],
-  );
-
   const selected = selectedAddr
     ? (graveyardPools.find((p) => p.address === selectedAddr) ?? null)
     : null;
+
+  /* P4.3 fleet ingestion — the Fleet view reads /api/gy/fleet. Manual
+     refresh only (an initial fetch on mount plus the view's explicit
+     Refresh button); NO polling. Same discipline as the snapshot
+     transport: the payload is re-validated client-side through the same
+     fail-closed parsers the server used (hydrateFleetPayload); anything
+     that fails is rendered as unavailable, never as data. The simulated
+     fixture bots are gone from this view — without a contract-clean trail
+     the view honestly withholds fleet data instead of substituting
+     fixtures. */
+  const [fleetTransport, setFleetTransport] = useState<FleetTransportPayload | null>(null);
+  /* D5 semantics — the last good trail stays held when a later refresh
+     fails: the view then shows it as "cached" instead of erasing real
+     observations. Never presented as fresh. */
+  const [fleetLastGood, setFleetLastGood] = useState<FleetTransportPayload | null>(null);
+  const [fleetLastGoodAtUnixMs, setFleetLastGoodAtUnixMs] = useState<number | null>(null);
+  const [fleetLoading, setFleetLoading] = useState(true);
+  const [fleetError, setFleetError] = useState<"unreachable" | "malformed" | null>(null);
+  const [fleetRefreshing, setFleetRefreshing] = useState(false);
+
+  const loadFleet = useCallback(async () => {
+    setFleetRefreshing(true);
+    setFleetError(null);
+    try {
+      const res = await fetch("/api/gy/fleet", { cache: "no-store" });
+      const json: unknown = await res.json();
+      const payload = hydrateFleetPayload(json, Date.now());
+      setFleetTransport(payload);
+      setFleetError(payload === null ? "malformed" : null);
+      if (payload !== null && payload.fleet !== null) {
+        setFleetLastGood(payload);
+        setFleetLastGoodAtUnixMs(Date.now());
+      }
+    } catch {
+      setFleetTransport(null);
+      setFleetError("unreachable");
+      // D5: deliberately keep `fleetLastGood` — a failed refresh must not
+      // erase the trail the operator was just looking at.
+    } finally {
+      setFleetLoading(false);
+      setFleetRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadFleet();
+  }, [loadFleet]);
+
+  /* Display derivation against the wall clock on every render — pure
+     rule, unit-tested in __tests__/fleetTransport.test.ts. */
+  const fleetDisplay = resolveDisplayFleetPayload(fleetTransport, fleetLastGood, Date.now());
+  const fleetCachedAtUnixMs =
+    fleetDisplay !== null && fleetDisplay.dataState === "cached" ? fleetLastGoodAtUnixMs : null;
+  const fleetLatestFailure =
+    fleetError === "unreachable"
+      ? "the console could not reach /api/gy/fleet"
+      : fleetError === "malformed"
+        ? "the transport payload failed client-side re-validation (fail-closed)"
+        : fleetTransport !== null && fleetTransport.fleet === null && fleetTransport.reason !== null
+          ? fleetTransport.reason
+          : null;
 
   return (
     <Shell active={view} onSelect={(v) => setView(v)}>
@@ -154,7 +211,18 @@ export default function GraveYieldConsole() {
           onSelect={(p) => setSelectedAddr(p?.address ?? null)}
         />
       )}
-      {view === "fleet" && <Fleet bots={bots} />}
+      {view === "fleet" && (
+        <Fleet
+          fleet={fleetDisplay}
+          latestTransport={fleetTransport}
+          cachedAtUnixMs={fleetCachedAtUnixMs}
+          latestFailure={fleetLatestFailure}
+          loading={fleetLoading}
+          error={fleetError}
+          refreshing={fleetRefreshing}
+          onRefresh={() => void loadFleet()}
+        />
+      )}
       {view === "claims" && <Claims />}
       {view === "protocol" && <Protocol />}
     </Shell>

@@ -29,7 +29,7 @@ export type ViewId = "overview" | "graveyard" | "fleet" | "claims" | "protocol";
 export const NAV: { id: ViewId; label: string; icon: React.ElementType; hint: string }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, hint: "Protocol pulse" },
   { id: "graveyard", label: "Graveyard", icon: Landmark, hint: "Derelict pool explorer" },
-  { id: "fleet", label: "Salvor Fleet", icon: Bot, hint: "Five-bot operations" },
+  { id: "fleet", label: "Salvor Fleet", icon: Bot, hint: "Live fleet-state ingest" },
   { id: "claims", label: "LP Claims", icon: HandCoins, hint: "Merkle-verified claims" },
   { id: "protocol", label: "Protocol", icon: FileLock2, hint: "Invariants · config · errors" },
 ];
@@ -380,7 +380,7 @@ function TopBar() {
             tone="warn"
             className="hidden sm:inline-flex"
           >
-            Mixed data — per-view labels: Graveyard real (snapshot), epoch live (RPC), fleet/claims simulated
+            Mixed data — per-view labels: Graveyard real (snapshot), epoch live (RPC), fleet ingested or withheld (FLEET_STATE_DIR), claims/overview simulated
           </ToneBadge>
           <WalletButton />
         </div>
