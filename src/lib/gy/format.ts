@@ -35,6 +35,32 @@ export function fmtDays(days: number): string {
   return `${days}d`;
 }
 
+/**
+ * Graveyard table "Idle" cell. `lastSwapUnix` is unix SECONDS per the Pool
+ * contract (snapshot loader stores seconds; criteriaOf normalizes ×1000).
+ * A value ≤ 0 means "not derivable" — the indexer recorded an activity
+ * failure for this pool — and must render as explicitly unavailable,
+ * never as a day count. (Regression: the table used to subtract seconds
+ * from Date.now() and rendered ~20,7xx fabricated days for unavailable
+ * pools, and a ~53× inflated count for real ones.)
+ */
+export function formatIdleDaysCell(lastSwapUnix: number, nowMs: number): string {
+  if (!Number.isFinite(lastSwapUnix) || lastSwapUnix <= 0) return "unavailable";
+  const days = Math.floor((nowMs - lastSwapUnix * 1000) / 86_400_000);
+  return `${Math.max(0, days)}d`;
+}
+
+/**
+ * Graveyard table "Collapse" cell. Snapshot-derived rows carry C2 as
+ * pending upstream (collapseBps is a 0 placeholder there), and a pending
+ * evaluation must never render as a fabricated 0.0%. (Regression guard
+ * for the same table cell.)
+ */
+export function formatCollapseCell(collapseBps: number, pending: boolean): string {
+  if (pending) return "—";
+  return `${(collapseBps / 100).toFixed(1)}%`;
+}
+
 export function fmtUtcClock(d: Date): string {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mm = String(d.getUTCMinutes()).padStart(2, "0");

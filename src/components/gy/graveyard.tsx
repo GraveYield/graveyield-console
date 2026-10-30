@@ -44,7 +44,7 @@ import { CriteriaChips, SectionHead, ToneBadge, CopyChip, criterionTone, useNow 
 import type { Pool, PoolState } from "@/lib/gy/types";
 import { criteriaOf, estimateSalvageEconomics, WSOL_MINT } from "@/lib/gy/estimator";
 import { SNAPSHOT, snapshotCriteriaOf } from "@/lib/gy/snapshot";
-import { fmtDuration, fmtNum, fmtSol, fmtUtcClock, POOL_STATE_META, shortAddr } from "@/lib/gy/format";
+import { fmtDuration, fmtNum, fmtSol, fmtUtcClock, formatCollapseCell, formatIdleDaysCell, POOL_STATE_META, shortAddr } from "@/lib/gy/format";
 import { cn } from "@/lib/utils";
 
 type SortKey = "score" | "tvl" | "inactivity";
@@ -200,7 +200,6 @@ export function Graveyard({
             <tbody>
               {rows.map((p) => {
                 const meta = POOL_STATE_META[p.state];
-                const days = Math.max(0, Math.floor((Date.now() - p.lastSwapUnix) / 86_400_000));
                 return (
                   <tr
                     key={p.address}
@@ -232,10 +231,10 @@ export function Graveyard({
                       {fmtSol(p.quoteReserveLamports, 2)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-[13px] tabular-nums text-slate-400">
-                      {days}d
+                      {formatIdleDaysCell(p.lastSwapUnix, Date.now())}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-[13px] tabular-nums text-slate-300">
-                      {(p.collapseBps / 100).toFixed(1)}%
+                      {formatCollapseCell(p.collapseBps, p.snapshotMeta !== undefined)}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span

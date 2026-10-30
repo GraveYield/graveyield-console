@@ -259,7 +259,7 @@ export const POOLS: Pool[] = [
 export const TIME_ANCHORS = {
   /** minutes from client t0 until the GRVE cert expires */
   certOneExpiryMinutes: 41,
-  /** seconds ago for the most recent swap of each pool, keyed by index */
+  /** days ago for the most recent swap of each pool, keyed by index */
   lastSwapAgoDays: [214, 178, 191, 166, 121, 142, 205, 173, 98, 268],
 } as const;
 
@@ -269,7 +269,11 @@ export function resolvePools(): Pool[] {
   if (t0 === null) t0 = Date.now();
   return POOLS.map((p, i) => ({
     ...p,
-    lastSwapUnix: Math.floor((t0 as number) - TIME_ANCHORS.lastSwapAgoDays[i] * 86_400_000),
+    // Pool.lastSwapUnix is unix SECONDS per the type contract (the snapshot
+    // loader stores seconds; estimator.criteriaOf normalizes ×1000). The
+    // fixture resolver used to emit milliseconds, which quietly broke C1
+    // evaluation for every simulated row and the graveyard idle-days cell.
+    lastSwapUnix: Math.floor((t0 as number) / 1000 - TIME_ANCHORS.lastSwapAgoDays[i] * 86_400),
     certExpiresAt:
       p.state === "certified"
         ? (t0 as number) + TIME_ANCHORS.certOneExpiryMinutes * 60_000
