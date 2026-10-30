@@ -6,11 +6,15 @@
 //   - docs/error_codes.md (Scanner 6000–6034, Vault 7000–7022)
 //   - docs/DEVNET.md (program IDs, NS-2 / DR-001 refresh of 2026-10-25)
 //   - salvor-bots/README.md (the five-bot fleet)
-// Pool telemetry, bot trails and claim positions are SIMULATED for the
-// console demo; the badge in the top bar says so. No salvage has run on
-// devnet yet — the salvaged-pool row exists to demonstrate the claims UI.
+// Pool telemetry and the Overview bot-event feed are SIMULATED fixtures;
+// the top-bar badge says so. The Fleet view no longer consumes fixtures:
+// since P4.3 it renders the salvor fleet's real FLEET_STATE_DIR trails
+// through /api/gy/fleet (fleetContract/fleetTransport/fleetSource), or an
+// honest unavailable state when no source is configured. No salvage has
+// run on devnet yet — the salvaged-pool row exists to demonstrate the
+// claims UI.
 
-import type { Bot, BotEvent, ClaimPosition, Invariant, Pool } from "./types";
+import type { BotEvent, ClaimPosition, Invariant, Pool } from "./types";
 
 export const CLUSTER = "devnet" as const;
 
@@ -305,7 +309,9 @@ const initialEvents: BotEvent[] = [
 
 export const INITIAL_EVENTS: BotEvent[] = initialEvents;
 
-/** Client-side generator pool — the feed appends one of these every few seconds. */
+/** Client-side generator pool — the Overview feed appends one of these every
+ * few seconds. SIMULATED and labeled as such; the Fleet view does not read
+ * it (P4.3 moved the Fleet view to real FLEET_STATE_DIR ingestion). */
 export const EVENT_GENERATOR: Omit<BotEvent, "id" | "ts">[] = [
   { bot: "scout", kind: "discovery", text: "Cycle — getProgramAccounts scan complete, cache hit rate 98.4%", level: "info" },
   { bot: "scout", kind: "evaluation", text: "SMTHG reserves re-read — quote vault 3.12 SOL, still ≥ floor", level: "info" },
@@ -319,93 +325,6 @@ export const EVENT_GENERATOR: Omit<BotEvent, "id" | "ts">[] = [
   { bot: "scout", kind: "evaluation", text: "DUSTY re-check — C3 still below 0.5 SOL floor, remains out of scope", level: "warn" },
 ];
 
-export const BOTS: Bot[] = [
-  {
-    id: "scout",
-    name: "Scout",
-    pkg: "@graveyield/scout",
-    role: "Discovery · never salvages",
-    description:
-      "Finds derelict-pool candidates, requests GraveScanner evaluation, watches the anchor/cert lifecycle, publishes opportunities. No submission path moves funds.",
-    mode: "dry-run",
-    status: "nominal",
-    stats: [
-      { label: "Pools scanned", value: "1,284" },
-      { label: "Candidates", value: "37" },
-      { label: "Anchors live", value: "5" },
-      { label: "Attestations", value: "19" },
-    ],
-    events: initialEvents.filter((e) => e.bot === "scout"),
-  },
-  {
-    id: "conservative",
-    name: "Conservative",
-    pkg: "@graveyield/conservative",
-    role: "Reference executor",
-    description:
-      "The reference executor: stronger economics, tighter slippage, conservative fee share. Dry-run by default; live mode needs explicit operator enablement plus a signer.",
-    mode: "dry-run",
-    status: "standby",
-    stats: [
-      { label: "Opportunities", value: "14" },
-      { label: "Evaluations", value: "14" },
-      { label: "Min net profit", value: "0.05 SOL" },
-      { label: "Slippage", value: "250 bps" },
-    ],
-    events: initialEvents.filter((e) => e.bot === "conservative"),
-  },
-  {
-    id: "sniper",
-    name: "Sniper",
-    pkg: "@graveyield/sniper",
-    role: "Latency-sensitive executor",
-    description:
-      "Urgency-ordered batches — soonest cert expiry first, tighter time windows, higher fee share. Same safety gates as every executor: no bypass of eligibility, Charter guard, simulation, or settlement verification.",
-    mode: "dry-run",
-    status: "standby",
-    stats: [
-      { label: "Batch size", value: "6" },
-      { label: "Median eval", value: "1.8 s" },
-      { label: "Fee share", value: "higher" },
-      { label: "Mode", value: "dry-run" },
-    ],
-    events: initialEvents.filter((e) => e.bot === "sniper"),
-  },
-  {
-    id: "experimental",
-    name: "Experimental",
-    pkg: "@graveyield/experimental",
-    role: "Isolated strategy sandbox",
-    description:
-      "Strategy sandbox with hard risk caps (fee budget, LP-position fraction) and full event attribution. Zero influence on the other bots.",
-    mode: "dry-run",
-    status: "standby",
-    stats: [
-      { label: "Fee budget cap", value: "0.01 SOL" },
-      { label: "LP fraction cap", value: "10%" },
-      { label: "Trials", value: "23" },
-      { label: "Attribution", value: "100%" },
-    ],
-    events: initialEvents.filter((e) => e.bot === "experimental"),
-  },
-  {
-    id: "monitor",
-    name: "Monitor / Risk",
-    pkg: "@graveyield/monitor",
-    role: "Read-only observer",
-    description:
-      "Observes the whole fleet, verifies confirmed salvages against the on-chain SalvageReceipt (40/40/20), detects anomalies. No keys, no builder, no submission path.",
-    mode: "read-only",
-    status: "watching",
-    stats: [
-      { label: "Receipts checked", value: "1/1" },
-      { label: "Anomalies", value: "0" },
-      { label: "Fee violations", value: "0" },
-      { label: "Keys held", value: "0" },
-    ],
-    events: initialEvents.filter((e) => e.bot === "monitor"),
-  },
-];
 
 export const CHARTER_INVARIANTS: Invariant[] = [
   { id: "INV-1", title: "The 20% share is a ceiling", detail: "A config update that tries to raise the protocol share is rejected. Governance may lower it — never raise it.", enforcement: "bytecode", error: "7005 · ProtocolShareExceedsCeiling" },
