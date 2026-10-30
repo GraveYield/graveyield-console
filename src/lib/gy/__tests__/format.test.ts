@@ -4,6 +4,9 @@
 /// <reference types="bun-types" />
 import { describe, test, expect } from "bun:test";
 
+import { resolvePools } from "../data";
+import { criteriaOf } from "../estimator";
+
 import {
   fmtSol,
   fmtNum,
@@ -11,6 +14,8 @@ import {
   fmtDuration,
   fmtDays,
   fmtUtcClock,
+  formatCollapseCell,
+  formatIdleDaysCell,
   POOL_STATE_META,
 } from "../format";
 
@@ -80,5 +85,59 @@ describe("POOL_STATE_META", () => {
     ]) {
       expect(POOL_STATE_META[s], `missing meta for state ${s}`).toBeDefined();
     }
+  });
+});
+
+describe("formatIdleDaysCell (graveyard table Idle cell)", () => {
+  const now = Date.UTC(2026, 9, 30, 12, 0, 0); // 2026-10-30 12:00:00 UTC, ms
+
+  test("regression: lastSwapUnix 0 (activity not derivable) renders unavailable — never a fabricated day count", () => {
+    // 11 of 12 committed snapshot pools carry lastSwap: null → mapped to 0.
+    // The old cell math rendered these as ~20,754d.
+    expect(formatIdleDaysCell(0, now)).toBe("unavailable");
+    expect(formatIdleDaysCell(-5, now)).toBe("unavailable");
+  });
+
+  test("regression: unix-SECONDS input produces the correct day count (old cell subtracted seconds from Date.now())", () => {
+    // Real committed snapshot row: lastSwap.unixTs = 1_759_460_872
+    // (2025-10-03T05:47:52Z). The old math rendered ~20,715d; the correct
+    // count to 2026-10-30 12:00 UTC is 392d.
+    expect(formatIdleDaysCell(1_759_460_872, now)).toBe("392d");
+  });
+
+  test("clock skew clamps at zero days", () => {
+    expect(formatIdleDaysCell(Math.floor(now / 1000), now)).toBe("0d");
+  });
+
+  test("Pool.lastSwapUnix contract: fixture resolver output is seconds, not ms", () => {
+    // resolvePools() used to emit milliseconds, violating the documented
+    // Pool contract and breaking estimator.criteriaOf's ×1000 C1 math for
+    // every simulated row (C1 silently evaluated as fail).
+    const pools = resolvePools();
+    for (const p of pools) {
+      // Unix seconds for any plausibly-current clock: 1.5e9 … 4e9
+      // (ms values would be ≥ 1e12).
+      expect(p.lastSwapUnix).toBeLessThan(4_000_000_000);
+      expect(p.lastSwapUnix).toBeGreaterThan(1_500_000_000);
+      // And the shared criteriaOf must see C1 as pass for the 98–268d-old
+      // simulated swaps.
+      const c1 = criteriaOf(p, Date.now()).find((c) => c.id === "C1");
+      expect(c1?.state).toBe("pass");
+    }
+  });
+});
+
+describe("formatCollapseCell (graveyard table Collapse cell)", () => {
+  test("regression: pending collapse renders an em-dash — never a fabricated 0.0%", () => {
+    // Snapshot-derived rows pin collapseBps to 0 while C2 is pending
+    // upstream; the old cell rendered that as 0.0%.
+    expect(formatCollapseCell(0, true)).toBe("—");
+    expect(formatCollapseCell(9_982, true)).toBe("—");
+  });
+
+  test("evaluated collapse renders percent at one decimal", () => {
+    expect(formatCollapseCell(9_982, false)).toBe("99.8%");
+    expect(formatCollapseCell(9_900, false)).toBe("99.0%");
+    expect(formatCollapseCell(0, false)).toBe("0.0%");
   });
 });
