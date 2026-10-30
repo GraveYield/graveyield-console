@@ -19,10 +19,10 @@ env:
   BUN_VERSION: 1.3.14
 
 jobs:
-  # Phase 1 (build/reliability): this repo had ZERO CI. There is no unit
-  # test battery here (Phase 0 record: "console = no test battery, next
-  # build is the battery") — the production build IS the test, and since
-  # typescript.ignoreBuildErrors was removed it type-checks for real.
+  # Phase 1 (build/reliability): this repo had ZERO CI. Since P3-A the
+  # battery below is real (estimator vectors, criteria thresholds, snapshot
+  # contract, program-ID pins) — the production build additionally
+  # type-checks for real since typescript.ignoreBuildErrors was removed.
   verify:
     name: typecheck + lint + test + build + audit
     runs-on: ubuntu-latest
