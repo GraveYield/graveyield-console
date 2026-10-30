@@ -283,12 +283,10 @@ export function resolvePools(): Pool[] {
   }));
 }
 
-export const EPOCH = {
-  current: 713,
-  progress: 0.62,
-  /** Solana epochs are ~2–3 days; the console shows a ~44h reference bar. */
-  lengthHours: 44,
-} as const;
+/** P4.2 (audit D6): the fabricated `EPOCH` fixture constant was removed —
+ * the console's current epoch is live `getEpochInfo` telemetry (see
+ * protocolLive.ts), and criteriaOf takes the epoch as an explicit argument.
+ * The per-pool anchorEpoch values below remain simulated fixture history. */
 
 const initialEvents: BotEvent[] = [
   { id: 1, ts: "12:02:11", bot: "scout", kind: "discovery", text: "Cycle #412 — enumerated 1,284 Raydium V4 AmmInfo accounts (752-byte layout)", level: "info" },

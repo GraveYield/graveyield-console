@@ -30,6 +30,7 @@ import {
 } from "./snapshotContract";
 import {
   transportDataState,
+  staleReason,
   type SnapshotTransportPayload,
   type SnapshotSourceKind,
 } from "./snapshotTransport";
@@ -248,7 +249,7 @@ export function bytesToPayload(
   return {
     artifactState: fresh ? "valid" : "stale",
     dataState: fresh ? "real" : "stale",
-    reason: fresh ? null : `Snapshot age ${ageMs} ms exceeds its ${maxAgeMs} ms freshness budget — data is served as stale, never as fresh.`,
+    reason: fresh ? null : staleReason(ageMs, maxAgeMs),
     reasonCode: null,
     source: ctx.source,
     checkedAtUnixMs: ctx.checkedAtUnixMs,

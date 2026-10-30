@@ -70,12 +70,13 @@ const FILTERS: { id: string; label: string; match: (s: PoolState) => boolean }[]
   },
 ];
 
-const EPOCHS_NOW = 713;
-
 export function Graveyard({
   pools,
   snapshot,
   transport,
+  latestTransport,
+  cachedAtUnixMs,
+  latestFailure,
   transportLoading,
   transportError,
   refreshing,
@@ -85,7 +86,17 @@ export function Graveyard({
 }: {
   pools: Pool[];
   snapshot: ConsoleSnapshot | null;
+  /** Effective display payload — freshness re-evaluated against the wall
+      clock; dataState may be "cached" when held from a prior good check. */
   transport: SnapshotTransportPayload | null;
+  /** Raw latest check result — diagnostics for the no-data banner. */
+  latestTransport: SnapshotTransportPayload | null;
+  /** When the display payload is held from a previous successful check
+      (audit D5 "cached" state), the unix-ms time of that check. */
+  cachedAtUnixMs: number | null;
+  /** Why the latest check did not produce an artifact (while cached data is
+      on screen). Null when the display payload is from the latest check. */
+  latestFailure: string | null;
   transportLoading: boolean;
   transportError: "unreachable" | "malformed" | null;
   refreshing: boolean;
@@ -144,6 +155,9 @@ export function Graveyard({
         <SectionHead title="Graveyard" right={searchBox} />
         <TransportBanner
           transport={transport}
+          latestTransport={latestTransport}
+          cachedAtUnixMs={cachedAtUnixMs}
+          latestFailure={latestFailure}
           loading={transportLoading}
           error={transportError}
           refreshing={refreshing}
@@ -167,10 +181,14 @@ export function Graveyard({
     <div className="animate-fade-up space-y-5">
       <SectionHead title="Graveyard" right={searchBox} />
 
-      {/* Data provenance banner — REAL snapshot data, four artifact states,
-          freshness explicit, manual refresh only. */}
+      {/* Data provenance banner — REAL snapshot data, four artifact states
+          plus the P4.2 cached holding state, freshness re-evaluated against
+          the wall clock, manual refresh only. */}
       <TransportBanner
         transport={transport}
+        latestTransport={latestTransport}
+        cachedAtUnixMs={cachedAtUnixMs}
+        latestFailure={latestFailure}
         loading={transportLoading}
         error={transportError}
         refreshing={refreshing}
@@ -341,48 +359,94 @@ function StateBadge({ state }: { state: PoolState }) {
   );
 }
 
-/* ── Snapshot transport banner (P4.1 Step 1) ────────────────────
-   Four explicit artifact states — valid / stale / missing / corrupt.
-   Stale, missing and corrupt data can never present as fresh: the
-   badge says which state is served, and missing/corrupt carry the
-   route's diagnostic reason. Manual refresh only — the console
-   never polls the indexer. */
+/* ── Snapshot transport banner (P4.1 Step 1; P4.2 D5) ──────────
+   Five explicit display states — fresh / stale / cached / missing /
+   corrupt. Freshness is re-evaluated against the wall clock, so a
+   valid-at-fetch artifact degrades to stale the moment its budget
+   lapses mid-session; a failed refresh keeps the last good artifact
+   on screen as cached (staleness still wins). Stale, cached, missing
+   and corrupt data can never present as fresh. Manual refresh only —
+   the console never polls the indexer. */
 function TransportBanner({
   transport,
+  latestTransport,
+  cachedAtUnixMs,
+  latestFailure,
   loading,
   error,
   refreshing,
   onRefresh,
 }: {
   transport: SnapshotTransportPayload | null;
+  latestTransport: SnapshotTransportPayload | null;
+  cachedAtUnixMs: number | null;
+  latestFailure: string | null;
   loading: boolean;
   error: "unreachable" | "malformed" | null;
   refreshing: boolean;
   onRefresh: () => void;
 }) {
+  const cached = transport !== null && cachedAtUnixMs !== null;
   const state = loading
     ? { tone: "muted" as const, label: "checking snapshot…" }
-    : error === "unreachable"
-      ? { tone: "bad" as const, label: "snapshot transport unreachable" }
-      : error === "malformed"
-        ? { tone: "bad" as const, label: "transport payload rejected" }
-        : transport === null
-          ? { tone: "muted" as const, label: "checking snapshot…" }
-          : transport.artifactState === "valid"
-            ? { tone: "ok" as const, label: "snapshot fresh" }
-            : transport.artifactState === "stale"
-              ? { tone: "warn" as const, label: "snapshot stale" }
-              : transport.artifactState === "missing"
+    : cached
+      ? transport.artifactState === "stale"
+        ? { tone: "warn" as const, label: "snapshot cached (stale)" }
+        : { tone: "info" as const, label: "snapshot cached" }
+      : error === "unreachable"
+        ? { tone: "bad" as const, label: "snapshot transport unreachable" }
+        : error === "malformed"
+          ? { tone: "bad" as const, label: "transport payload rejected" }
+          : transport === null
+            ? latestTransport === null
+              ? { tone: "muted" as const, label: "checking snapshot…" }
+              : latestTransport.artifactState === "missing"
                 ? { tone: "warn" as const, label: "snapshot unavailable" }
-                : { tone: "bad" as const, label: "snapshot corrupt" };
+                : { tone: "bad" as const, label: "snapshot corrupt" }
+            : transport.artifactState === "valid"
+              ? { tone: "ok" as const, label: "snapshot fresh" }
+              : transport.artifactState === "stale"
+                ? { tone: "warn" as const, label: "snapshot stale" }
+                : transport.artifactState === "missing"
+                  ? { tone: "warn" as const, label: "snapshot unavailable" }
+                  : { tone: "bad" as const, label: "snapshot corrupt" };
 
   const checkedAt =
     transport === null ? null : (
       <>checked {fmtUtcClock(new Date(transport.checkedAtUnixMs))} UTC</>
     );
+  const lastGoodCheckedAt =
+    cachedAtUnixMs === null ? null : fmtUtcClock(new Date(cachedAtUnixMs));
 
   let detail: React.ReactNode = null;
-  if (!loading && error === null && transport !== null) {
+  if (!loading && cached && transport !== null) {
+    // P4.2 D5 — cached holding state: the artifact on screen is from a
+    // previous successful check and the latest check failed. Its own
+    // freshness verdict (fresh vs stale) is still stated explicitly.
+    const s = transport.snapshot;
+    detail = (
+      <span>
+        <span className="font-semibold text-cyan-200">Held from the last good check</span> — fetched{" "}
+        {lastGoodCheckedAt ?? "unknown"} UTC · artifact{" "}
+        {transport.artifactState === "stale"
+          ? `stale (age ${transport.ageMs !== null ? fmtDuration(transport.ageMs) : "unknown"} exceeds its ${
+              transport.maxAgeMs !== null ? fmtDuration(transport.maxAgeMs) : "24h"
+            } budget — never presented as fresh)`
+          : `still inside its ${transport.maxAgeMs !== null ? fmtDuration(transport.maxAgeMs) : "24h"} freshness budget, but not reconfirmed`}
+        {s !== null && (
+          <>
+            {' '}· generated {fmtUtcClock(new Date(s.generatedAtUnixMs))} UTC
+          </>
+        )}
+        {latestFailure !== null && (
+          <>
+            {' '}· <span className="text-amber-200">latest check failed: {latestFailure}</span>
+          </>
+        )}
+        {' '}· Retry with Refresh.
+      </span>
+    );
+  } else if (!loading && error === null && transport !== null) {
     const s = transport.snapshot;
     if (transport.artifactState === "valid" && s) {
       detail = (
@@ -438,6 +502,19 @@ function TransportBanner({
     detail = <span>The console could not reach /api/gy/snapshot — the snapshot transport itself is down. Retry with Refresh.</span>;
   } else if (error === "malformed") {
     detail = <span>The transport payload failed client-side re-validation (fail-closed) — treated as unavailable. Retry with Refresh.</span>;
+  } else if (transport === null && latestTransport !== null) {
+    // No artifact is on screen — the latest raw check's reason is the
+    // diagnostic surface (missing | corrupt).
+    detail = (
+      <span>
+        {latestTransport.reason ?? "No artifact available."}
+        {' '}· checked {fmtUtcClock(new Date(latestTransport.checkedAtUnixMs))} UTC
+        {' '}·{' '}
+        <span className="text-slate-500">
+          source: {latestTransport.source.kind === "none" ? "none configured" : `${latestTransport.source.kind} ${latestTransport.source.uri ?? ""}`}
+        </span>
+      </span>
+    );
   }
 
   return (
@@ -464,7 +541,10 @@ function CriteriaRow({ pool, snapshot }: { pool: Pool; snapshot: ConsoleSnapshot
   const now = Date.now();
   const criteria = pool.snapshotCriteria
     ? snapshotCriteriaOf(pool, now, snapshot)
-    : criteriaOf(pool, now);
+    // D6 fail-closed: non-snapshot rows have no truthful current epoch to
+    // name here — C6 stays "pending · current epoch unavailable" instead of
+    // inheriting a stale constant. Snapshot rows never reach this branch.
+    : criteriaOf(pool, now, null);
   return <CriteriaChips criteria={criteria} />;
 }
 
@@ -487,7 +567,7 @@ function PoolSheet({
     () =>
       pool.snapshotCriteria
         ? snapshotCriteriaOf(pool, now ?? Date.now(), snapshot)
-        : criteriaOf(pool, now ?? Date.now()),
+        : criteriaOf(pool, now ?? Date.now(), null),
     [pool, now, snapshot],
   );
   const [lpPct, setLpPct] = useState([100]);

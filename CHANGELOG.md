@@ -5,6 +5,21 @@ Commit identity convention: all GraveYield engineering commits are authored as s
 
 ## [Unreleased]
 
+### Eligibility visualization honesty — 2026-10-31 (P4.2: audit D5/D6)
+
+The two remaining DataState/epoch defects from the Phase 4.0 audit. Charter unchanged: no fabricated data, no protocol changes, no transaction submission, no mainnet work — the only new network call is a read-only `getEpochInfo`.
+
+- **D5 — every DataState is now assignable, and nothing can upgrade what the transport refused:**
+  - `cached` is finally a real state: when a manual refresh fails (transport unreachable, payload rejected, missing/corrupt artifact), the last good artifact stays on screen and is explicitly labeled **cached** — real observations from a previous successful check that the latest check could not reconfirm. Previously the failed refresh wiped the operator's data (`setTransport(null)`); retention with honest labeling is strictly more truthful than erasure. Precedence is one-directional: an artifact past its own budget still reads **stale** (the stronger claim); failed states stay **unavailable**.
+  - Freshness now follows the wall clock, not the fetch moment: the display payload is re-evaluated against the current time on every render (`effectiveTransportState`, pure clock math on the already-validated payload — no network, no polling). A valid-at-fetch artifact degrades to **stale** the moment its own 24 h budget lapses mid-session; previously the "fresh" badge froze at fetch time forever.
+  - The derivation is one pure, unit-tested rule (`resolveDisplayPayload` in `snapshotTransport.ts`); the banner grew a fifth display state (**snapshot cached**, with the last-good check time, the artifact's own fresh/stale verdict, and the latest failure reason) next to fresh/stale/unavailable/corrupt.
+- **D6 — the fabricated epoch 713 is gone everywhere:**
+  - `criteriaOf(pool, now, currentEpoch)` takes the current epoch as an explicit argument with no default; the C6 gap is computed only when both ends are known. Unknown epoch → **pending · current epoch unavailable** — a stale constant can never manufacture a pass/fail. Snapshot-backed rows were never affected (the indexer pins C6 pending upstream).
+  - The shell's top-bar epoch telemetry (`713 · 62%`, previously three independent constants: `data.ts EPOCH`, a dead `graveyard.tsx EPOCHS_NOW`, and a hard-coded JSX literal) is now **live read-only `getEpochInfo` telemetry** fetched once per page load from the configured devnet RPC (`protocolLive.fetchEpochTelemetry`, fail-closed validation of the answer). Unreachable RPC renders *—* / *unavailable* — never a substitute number. No polling; `EPOCH` and the dead constant were deleted.
+- **Tests** — new honesty battery (`eligibilityHonesty.test.ts`, 22 tests; suite 85 → 107): display-time freshness degradation and its ≤ boundary, one-way stale→valid impossibility, cached/stale/unavailable precedence, the full failed-wire sweep (unreachable / stale / corrupt × time) asserting the display dataState is never `real`, future-dated artifacts rejected upstream so the display math can never be exploited, the C6 explicit-epoch contract (null/omitted/NaN → pending, boundary gaps 1/2/5), and a source grep pinning that no baked-in epoch constant returns to the estimator.
+- **Docs** — README data-honesty section gained the wall-clock freshness, cached-holding and live-epoch paragraphs.
+- Unchanged by design: transport four-state envelope on the wire, eligibility thresholds, estimator economics, criteria honesty (C2/C4/C5/C6 pending-pinned), read-only/dry-run posture.
+
 ### Snapshot artifact transport + live data integration — 2026-10-31 (P4.1 Step 1)
 
 The Graveyard no longer renders the build-time committed artifact; it reads a server-resolved snapshot source with an explicit, test-pinned four-state contract. Still devnet-operations-only: no transaction path was added, and nothing implies automatic real-time ingestion.

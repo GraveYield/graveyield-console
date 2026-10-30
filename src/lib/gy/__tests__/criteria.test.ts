@@ -8,6 +8,11 @@ import type { Pool } from "../types";
 
 const DAY = 86_400_000;
 const NOW = 1_800_000_000_000; // fixed "now"
+/* P4.2 (audit D6): the current epoch is an explicit criteriaOf argument.
+   800 is an arbitrary named test epoch — nothing in the estimator owns an
+   epoch constant anymore, so every C6 case below is expressed relative to
+   NOW_EPOCH. */
+const NOW_EPOCH = 800;
 
 const pool = (over: Partial<Pool> = {}): Pool => ({
   address: "POOL1111111111111111111111111111111111111111",
@@ -24,12 +29,13 @@ const pool = (over: Partial<Pool> = {}): Pool => ({
   lpLocked: false,
   state: "certification-ready",
   score: 0.8,
-  anchorEpoch: 700,
+  anchorEpoch: 798,
   certExpiresAt: null,
   ...over,
 });
 
-const states = (p: Pool) => Object.fromEntries(criteriaOf(p, NOW).map((c) => [c.id, c.state]));
+const states = (p: Pool, currentEpoch: number | null = NOW_EPOCH) =>
+  Object.fromEntries(criteriaOf(p, NOW, currentEpoch).map((c) => [c.id, c.state]));
 
 describe("criteriaOf", () => {
   test("all pass on a fully-eligible derelict pool", () => {
@@ -67,9 +73,33 @@ describe("criteriaOf", () => {
     expect(states(pool({ lpLocked: true })).C5).toBe("fail");
   });
 
-  test("C6 pending until anchored and ≥ 2 epochs of gap", () => {
+  test("C6 pending until anchored and ≥ 2 epochs of gap (explicit current epoch)", () => {
     expect(states(pool({ anchorEpoch: null })).C6).toBe("pending");
-    expect(states(pool({ anchorEpoch: 712 })).C6).toBe("pending");
-    expect(states(pool({ anchorEpoch: 711 })).C6).toBe("pass");
+    // gap = NOW_EPOCH - anchor: 1 → pending, 2 → pass, 5 → pass.
+    expect(states(pool({ anchorEpoch: NOW_EPOCH - 1 })).C6).toBe("pending");
+    expect(states(pool({ anchorEpoch: NOW_EPOCH - 2 })).C6).toBe("pass");
+    expect(states(pool({ anchorEpoch: NOW_EPOCH - 5 })).C6).toBe("pass");
+    const c6 = criteriaOf(pool({ anchorEpoch: NOW_EPOCH - 5 }), NOW, NOW_EPOCH).find(
+      (c) => c.id === "C6",
+    );
+    expect(c6?.value).toBe("5 / 2 epochs");
+  });
+
+  test("D6 fail-closed: unknown current epoch keeps C6 pending — the gap is never fabricated", () => {
+    const anchored = pool({ anchorEpoch: 798 });
+    const c6 = criteriaOf(anchored, NOW, null).find((c) => c.id === "C6");
+    expect(c6?.state).toBe("pending");
+    expect(c6?.value).toBe("current epoch unavailable");
+    // Runtime robustness: an omitted argument must behave like null, never
+    // resurrect a baked-in epoch default.
+    const omitted = criteriaOf(anchored, NOW, undefined as unknown as null).find(
+      (c) => c.id === "C6",
+    );
+    expect(omitted?.state).toBe("pending");
+    expect(omitted?.value).toBe("current epoch unavailable");
+    // Non-integer / non-finite epochs are equally unusable.
+    expect(
+      criteriaOf(anchored, NOW, Number.NaN).find((c) => c.id === "C6")?.state,
+    ).toBe("pending");
   });
 });

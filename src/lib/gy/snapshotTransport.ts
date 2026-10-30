@@ -75,6 +75,99 @@ export function transportDataState(artifactState: ArtifactState): DataState {
   }
 }
 
+/** Shared stale explanation — one wording for the resolver and the display path. */
+export function staleReason(ageMs: number, maxAgeMs: number): string {
+  return `Snapshot age ${ageMs} ms exceeds its ${maxAgeMs} ms freshness budget — data is served as stale, never as fresh.`;
+}
+
+/**
+ * P4.2 (audit D5) — display-time freshness re-evaluation.
+ *
+ * Freshness is a function of the wall clock, not of the moment the artifact
+ * happened to be fetched. A payload that classified "valid/real" at fetch
+ * time MUST degrade to "stale" once the client's clock passes the artifact's
+ * own budget — otherwise a tab left open past the budget would keep a
+ * "fresh" badge forever, exactly the stale-presented-as-fresh failure the
+ * transport contract exists to prevent. Pure clock math on the already
+ * validated payload: no network, no polling, no new data. The clock only
+ * moves forward, so this can degrade (valid→stale) but never upgrade
+ * (stale→valid) — a re-freshened artifact requires a real re-fetch.
+ */
+export function effectiveTransportState(
+  payload: SnapshotTransportPayload,
+  nowMs: number,
+): SnapshotTransportPayload {
+  const snap = payload.snapshot;
+  if (snap === null) return payload; // missing/corrupt — nothing to age
+  const ageMs = Math.max(0, nowMs - snap.generatedAtUnixMs);
+  const maxAgeMs = snap.freshness.maxAgeMs;
+  const fresh = ageMs <= maxAgeMs;
+  if (fresh === (payload.artifactState === "valid")) {
+    // Same verdict — only the reported age moves with the clock.
+    return { ...payload, ageMs };
+  }
+  if (fresh) {
+    // Defensive: only reachable with a hand-built payload whose state
+    // disagreed with its own budget (hydrate forbids this on the wire).
+    return { ...payload, artifactState: "valid", dataState: "real", reason: null, reasonCode: null, ageMs, maxAgeMs };
+  }
+  return {
+    ...payload,
+    artifactState: "stale",
+    dataState: "stale",
+    reason: staleReason(ageMs, maxAgeMs),
+    reasonCode: null,
+    ageMs,
+    maxAgeMs,
+  };
+}
+
+/**
+ * P4.2 (audit D5) — assign the previously-unassigned "cached" DataState.
+ *
+ * When the latest manual refresh fails (transport unreachable, malformed
+ * payload, missing/corrupt artifact) the console keeps the last good
+ * artifact on screen instead of wiping real data — but it must say so.
+ * "cached" records exactly that holding mode: real observations from a
+ * previous successful check that the latest check could not reconfirm.
+ * Precedence is honest and one-directional: an artifact past its own
+ * freshness budget still reads "stale" (the stronger claim), and a failed
+ * state still reads "unavailable". "cached" therefore replaces "real" only —
+ * data shown as cached is never presented as freshly reconfirmed.
+ */
+export function asCachedDisplay(
+  payload: SnapshotTransportPayload,
+  nowMs: number,
+): SnapshotTransportPayload {
+  const aged = effectiveTransportState(payload, nowMs);
+  if (aged.snapshot === null) return aged; // unavailable stays unavailable
+  if (aged.dataState === "real") return { ...aged, dataState: "cached" };
+  return aged; // stale stays stale; nothing else can be held as last-good
+}
+
+/**
+ * P4.2 (audit D5) — the Graveyard's display derivation as one pure, tested
+ * rule. page.tsx applies it against the current clock on every render (no
+ * network, no polling):
+ *
+ *   1. the latest check carried an artifact → display it, freshness
+ *      re-evaluated now (valid-at-fetch degrades to stale when the budget
+ *      lapses mid-session);
+ *   2. the latest check carried no artifact (failed transport, malformed
+ *      payload, missing/corrupt artifact) but a last-good payload is held →
+ *      display that, marked cached (staleness still wins);
+ *   3. nothing ever served → null (honest unavailable state).
+ */
+export function resolveDisplayPayload(
+  latest: SnapshotTransportPayload | null,
+  lastGood: SnapshotTransportPayload | null,
+  nowMs: number,
+): SnapshotTransportPayload | null {
+  if (latest !== null && latest.snapshot !== null) return effectiveTransportState(latest, nowMs);
+  if (lastGood !== null) return asCachedDisplay(lastGood, nowMs);
+  return null;
+}
+
 export const TRANSPORT_REASON_CODES: readonly TransportReasonCode[] = [
   "NO_SOURCE_CONFIGURED",
   "SOURCE_CONFLICT",
