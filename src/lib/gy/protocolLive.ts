@@ -246,3 +246,59 @@ export async function fetchProtocolPulse(rpcHost: string = DEFAULT_DEVNET_RPC_HO
   ]);
   return { fetchedAtUnixMs: Date.now(), rpcHost, scanner, vault };
 }
+
+/* ── Epoch telemetry (P4.2, audit D6) ────────────────────────────
+   The C6 epoch gap and the shell's epoch bar need the CURRENT epoch.
+   It is read live from the same public devnet RPC (getEpochInfo) —
+   never baked into the source as a constant. A failed or malformed
+   lookup degrades to "unavailable" at the call site; it never falls
+   back to a stale number. One read per mount — no polling. */
+export interface EpochTelemetry {
+  fetchedAtUnixMs: number;
+  rpcHost: string;
+  /** Current epoch number as reported by the RPC. */
+  epoch: number;
+  /** slotIndex / slotsInEpoch, clamped to [0, 1]. */
+  progress: number;
+}
+
+interface EpochInfoValue {
+  absoluteSlot?: unknown;
+  blockHeight?: unknown;
+  epoch?: unknown;
+  slotIndex?: unknown;
+  slotsInEpoch?: unknown;
+}
+
+function asNonNegativeInt(v: unknown): number | null {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
+}
+
+export async function fetchEpochTelemetry(
+  rpcHost: string = DEFAULT_DEVNET_RPC_HOST,
+): Promise<EpochTelemetry> {
+  const res = await fetch(`https://${rpcHost}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getEpochInfo", params: [] }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`rpc http ${res.status}`);
+  const json = (await res.json()) as { result?: { value?: EpochInfoValue }; error?: unknown };
+  if (json.error) throw new Error("rpc returned an error");
+  const value = json.result?.value;
+  const epoch = asNonNegativeInt(value?.epoch);
+  const slotIndex = asNonNegativeInt(value?.slotIndex);
+  const slotsInEpoch = asNonNegativeInt(value?.slotsInEpoch);
+  // Fail-closed: an unusable answer is an error, not a zero — the caller
+  // renders "unavailable" instead of any substitute number.
+  if (epoch === null || slotIndex === null || slotsInEpoch === null || slotsInEpoch <= 0) {
+    throw new Error("getEpochInfo returned an unusable payload");
+  }
+  return {
+    fetchedAtUnixMs: Date.now(),
+    rpcHost,
+    epoch,
+    progress: Math.min(1, Math.max(0, slotIndex / slotsInEpoch)),
+  };
+}

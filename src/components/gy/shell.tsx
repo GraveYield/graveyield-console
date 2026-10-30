@@ -22,7 +22,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { ToneBadge } from "./widgets";
-import { EPOCH } from "@/lib/gy/data";
+import { fetchEpochTelemetry, type EpochTelemetry } from "@/lib/gy/protocolLive";
 
 export type ViewId = "overview" | "graveyard" | "fleet" | "claims" | "protocol";
 
@@ -299,7 +299,32 @@ function WalletButton() {
 }
 
 function TopBar() {
-  const pct = Math.round(EPOCH.progress * 100);
+  /* P4.2 (audit D6) — live epoch telemetry: one read-only getEpochInfo per
+     mount against the configured devnet RPC. No polling, and no fabricated
+     constant: an unreachable RPC renders "—" (unavailable), never a stale
+     epoch number. */
+  const [epoch, setEpoch] = useState<EpochTelemetry | null>(null);
+  const [epochState, setEpochState] = useState<"checking" | "live" | "unavailable">("checking");
+  useEffect(() => {
+    let alive = true;
+    fetchEpochTelemetry()
+      .then((e) => {
+        if (alive) {
+          setEpoch(e);
+          setEpochState("live");
+        }
+      })
+      .catch(() => {
+        if (alive) setEpochState("unavailable");
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const pct =
+    epochState === "live" && epoch !== null
+      ? Math.min(100, Math.max(0, Math.round(epoch.progress * 100)))
+      : null;
   return (
     <header className="sticky top-0 z-30 border-b border-white/8 bg-[#161616]/85 backdrop-blur-md">
       <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
@@ -307,20 +332,39 @@ function TopBar() {
         <div className="flex items-center gap-2 lg:hidden">
           <BrandMark />
         </div>
-        {/* desktop: epoch telemetry */}
+        {/* desktop: epoch telemetry — live from the devnet RPC (P4.2 D6) */}
         <div className="hidden min-w-0 flex-1 items-center gap-4 lg:flex">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
               Epoch
             </span>
-            <span className="font-mono text-sm font-semibold text-foreground">713</span>
+            <span
+              className="font-mono text-sm font-semibold text-foreground"
+              title={
+                epochState === "live"
+                  ? `live getEpochInfo from ${epoch?.rpcHost} (read-only; fetched once per load)`
+                  : epochState === "unavailable"
+                    ? "epoch lookup unavailable — the RPC did not answer; no value is fabricated"
+                    : "checking the RPC…"
+              }
+            >
+              {epochState === "live" && epoch !== null ? (
+                epoch.epoch
+              ) : epochState === "unavailable" ? (
+                <span className="text-slate-500">—</span>
+              ) : (
+                <span className="text-slate-600">…</span>
+              )}
+            </span>
             <div className="relative h-1.5 w-40 overflow-hidden rounded-full bg-white/8">
               <div
                 className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400"
-                style={{ width: `${pct}%` }}
+                style={{ width: `${pct ?? 0}%` }}
               />
             </div>
-            <span className="font-mono text-[11px] text-muted-foreground">{pct}%</span>
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {pct !== null ? `${pct}%` : epochState === "unavailable" ? "unavailable" : "…"}
+            </span>
           </div>
           <div className="hidden items-center gap-2 xl:flex">
             <span className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
@@ -336,7 +380,7 @@ function TopBar() {
             tone="warn"
             className="hidden sm:inline-flex"
           >
-            Mixed data — per-view labels: Graveyard real (snapshot), fleet/claims simulated
+            Mixed data — per-view labels: Graveyard real (snapshot), epoch live (RPC), fleet/claims simulated
           </ToneBadge>
           <WalletButton />
         </div>

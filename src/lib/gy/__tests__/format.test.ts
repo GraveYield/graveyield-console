@@ -120,8 +120,10 @@ describe("formatIdleDaysCell (graveyard table Idle cell)", () => {
       expect(p.lastSwapUnix).toBeLessThan(4_000_000_000);
       expect(p.lastSwapUnix).toBeGreaterThan(1_500_000_000);
       // And the shared criteriaOf must see C1 as pass for the 98–268d-old
-      // simulated swaps.
-      const c1 = criteriaOf(p, Date.now()).find((c) => c.id === "C1");
+      // simulated swaps. (P4.2 D6: the current epoch is an explicit
+      // argument — the fixture context has none to name, so null; C6 then
+      // stays pending, which this C1 assertion is unaffected by.)
+      const c1 = criteriaOf(p, Date.now(), null).find((c) => c.id === "C1");
       expect(c1?.state).toBe("pass");
     }
   });

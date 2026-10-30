@@ -148,10 +148,23 @@ function reject(reason: string): EconomicEstimate {
   return { status: "reject", reason };
 }
 
-/** Six-criteria evaluation for UI display — mirrors the spec §4 table. */
+/**
+ * Six-criteria evaluation for UI display — mirrors the spec §4 table.
+ *
+ * P4.2 (audit D6): the current epoch is an EXPLICIT input, never a baked-in
+ * constant. The C6 epoch gap is only computed when the caller can name the
+ * epoch it is evaluating against; `null` (or an omitted argument at runtime)
+ * fails closed to a "pending" C6 with an explicit "current epoch
+ * unavailable" value — a stale hardcoded epoch can never manufacture a
+ * pass/fail, and the gap is never fabricated. Callers derive the epoch from
+ * a truthful source (live getEpochInfo telemetry in the shell, or the test's
+ * own named epoch); snapshot-backed rows never reach this function's C6 —
+ * the indexer pins C6 "pending" upstream (snapshotCriteriaOf).
+ */
 export function criteriaOf(
   pool: import("./types").Pool,
   now: number,
+  currentEpoch: number | null,
 ): import("./types").Criterion[] {
   // `now` is Date.now() (milliseconds); pool.lastSwapUnix is unix SECONDS.
   // The unit normalization is done here — a mixed-unit subtraction once
@@ -162,7 +175,12 @@ export function criteriaOf(
   const c3Pass = pool.quoteReserveLamports >= 500_000_000n;
   const c4Pass = !pool.lpBurned;
   const c5Pass = !pool.lpLocked;
-  const epochGap = pool.anchorEpoch === null ? null : 713 - pool.anchorEpoch;
+  // D6 fail-closed: the gap exists only when BOTH ends of the subtraction
+  // are known. No default epoch — a hardcoded constant here once evaluated
+  // every pool against a number that could silently rot (audit D6).
+  const knownEpoch = typeof currentEpoch === "number" && Number.isFinite(currentEpoch);
+  const epochGap =
+    pool.anchorEpoch === null || !knownEpoch ? null : (currentEpoch as number) - pool.anchorEpoch;
   const c6Pass = epochGap !== null && epochGap >= 2;
 
   return [
@@ -211,8 +229,13 @@ export function criteriaOf(
       name: "Multi-epoch confirmation",
       detail: "Phase 1 stamps the anchor; phase 2 can only certify ≥ 2 consecutive epochs later with an identical criteria bitmap.",
       threshold: "≥ 2 epochs",
-      state: pool.anchorEpoch === null ? "pending" : c6Pass ? "pass" : "pending",
-      value: pool.anchorEpoch === null ? "no anchor" : `${Math.max(0, epochGap ?? 0)} / 2 epochs`,
+      state: pool.anchorEpoch === null ? "pending" : epochGap === null ? "pending" : c6Pass ? "pass" : "pending",
+      value:
+        pool.anchorEpoch === null
+          ? "no anchor"
+          : epochGap === null
+            ? "current epoch unavailable"
+            : `${Math.max(0, epochGap)} / 2 epochs`,
     },
   ];
 }
