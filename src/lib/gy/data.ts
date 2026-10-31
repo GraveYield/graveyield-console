@@ -14,7 +14,7 @@
 // run on devnet yet — the salvaged-pool row exists to demonstrate the
 // claims UI.
 
-import type { BotEvent, ClaimPosition, Invariant, Pool } from "./types";
+import type { BotEvent, Invariant, Pool } from "./types";
 
 export const CLUSTER = "devnet" as const;
 
@@ -339,50 +339,3 @@ export const CHARTER_INVARIANTS: Invariant[] = [
   { id: "INV-10", title: "No discretion in distribution", detail: "Eligibility is six objective on-chain criteria; the split is a formula. The protocol takes none — the salvor takes none either.", enforcement: "process" },
 ];
 
-/** Demo claim snapshot for the settled pool (simulated). */
-export const CLAIM_SNAPSHOT = {
-  poolAddress: "Lp5GhJ8wYV1ctGRVnRtK2mF6dXs9vQb4zHc7Wa3UeP1kTm",
-  poolLabel: "MOONX / WSOL",
-  vaultBalanceLamports: 12_470_118_044n, // 12.47 SOL in lp_holder_pool_vault
-  root: "8fKd21qYbVxwR7mT4cE9sHj5NpU2aGz6XkL3wQrBvDyM",
-  snapshotSlot: 331_902_118,
-  holders: 47,
-} as const;
-
-export const DEMO_WALLET = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
-
-export const CLAIM_POSITIONS: ClaimPosition[] = [
-  {
-    poolAddress: CLAIM_SNAPSHOT.poolAddress,
-    poolLabel: CLAIM_SNAPSHOT.poolLabel,
-    holder: DEMO_WALLET,
-    balanceAtSnapshot: 41_882_114,
-    shareBps: 219,
-    claimableLamports: 273_095_585n,
-    claimed: false,
-    proofDepth: 6,
-    root: CLAIM_SNAPSHOT.root,
-  },
-  {
-    poolAddress: CLAIM_SNAPSHOT.poolAddress,
-    poolLabel: CLAIM_SNAPSHOT.poolLabel,
-    holder: "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T",
-    balanceAtSnapshot: 118_004_772,
-    shareBps: 617,
-    claimableLamports: 769_404_284n,
-    claimed: false,
-    proofDepth: 6,
-    root: CLAIM_SNAPSHOT.root,
-  },
-  {
-    poolAddress: CLAIM_SNAPSHOT.poolAddress,
-    poolLabel: CLAIM_SNAPSHOT.poolLabel,
-    holder: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJL",
-    balanceAtSnapshot: 8_440_118,
-    shareBps: 44,
-    claimableLamports: 54_868_519n,
-    claimed: true,
-    proofDepth: 6,
-    root: CLAIM_SNAPSHOT.root,
-  },
-];

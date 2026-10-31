@@ -15,7 +15,7 @@ Five views, one route:
 | **Overview** | Protocol pulse — **live** devnet reads of both deployed programs and their `ProtocolConfig` PDAs, plus KPI cards and a fleet activity feed that remain **simulated fixtures**. |
 | **Graveyard** | Derelict pool explorer over **real indexer data** — the `grave-indexer console-snapshot` artifact is served by `/api/gy/snapshot` from a configured source and parsed by a fail-closed loader with per-pool provenance (sha256 account fingerprint, fetch timestamps) and a 24 h freshness budget. Four explicit artifact states — fresh / stale / unavailable / corrupt — with manual refresh (no polling). Search, state filters, sortable table (TVL / idle / collapse / score). Each pool opens a detail sheet with lifecycle position, six-criteria states, and the salvage estimator. |
 | **Salvor Fleet** | The five-bot operations fleet driven by **real fleet-state ingestion** — `/api/gy/fleet` reads the salvor fleet's `FLEET_STATE_DIR` JSONL trails (`monitor-events.jsonl`, `alerts.jsonl`) through a fail-closed contract transcribed from `salvor-bots` fleet-core/fleet-ops. Same four artifact states as the Graveyard (fresh / stale / unavailable / corrupt) plus the cached holding state, manual refresh, and trail-derived numbers only — no simulated bot cards. Without a configured state dir the view honestly withholds fleet data. |
-| **LP Claims** | Merkle-verified claim lookup — **simulated**; real snapshot and on-chain claim integration is not built yet. |
+| **LP Claims** | Claim lookup over **real distribution + on-chain data** — the sealed `grave-snapshotter` artifact (Merkle root, per-holder leaves/proofs, reconciliation identity) is served by `/api/gy/claims` from a configured source, integrity-verified through the vendored canonical SDK, and bound to the live devnet `PoolRegistry`/`SalvageReceipt`/`ClaimRecord`/vault reads. Wallet lookup distinguishes exactly: no claim record found / snapshot unavailable / wallet not eligible / proof unavailable / claimable, plus the transaction lifecycle (prepared → submitted → confirmed → failed) where "confirmed" requires the client's own on-chain `ClaimRecord` re-read. Non-expiring claim semantics; per-holder rows never leave the server (only the queried wallet's own row). |
 | **Protocol** | Charter invariants register, deployed program IDs, config defaults, PDA map, and a full error decoder (6000–6034, 7000–7022). |
 
 ![Pool detail](docs/pool-detail.png)
@@ -37,7 +37,8 @@ Data honesty is per-view and labeled in the UI:
 - **The epoch is live, not hard-coded**: the top-bar epoch number and progress come from one read-only `getEpochInfo` call per page load; if the RPC does not answer they render as *—* (unavailable) instead of a fabricated constant. The C6 epoch gap in the criteria engine is computed only from an explicitly provided current epoch — with none, C6 reads *pending · current epoch unavailable*, never a gap invented from a stale number.
 - **The protocol pulse is live**: raw devnet JSON-RPC reads of both deployed programs and their `ProtocolConfig` PDAs, Anchor-discriminator-checked with byte-pinned decoders.
 - **Fleet trails are real when a state dir is configured**: the Fleet view reads the salvor fleet's `FLEET_STATE_DIR` (the JSONL trails `@graveyield/fleet-ops` writes: the Monitor's `monitor-events.jsonl` and `alerts.jsonl`) through `/api/gy/fleet`, parsed by a fail-closed contract that transcribes the upstream `FleetEvent`/`Alert` schemas exactly and rejects any unknown vocabulary. The four-state envelope and wall-clock freshness semantics match the snapshot transport, including the cached holding state for failed refreshes. Counts are trail-derived only — no mode badges, no invented statuses; the Scout's separate `SCOUT_REPORT_FILE` trail is documented as out of premise, so an empty Scout card reports exactly that. With no source configured the view withholds fleet data instead of falling back to fixtures. See [`docs/fleet-ingestion.md`](docs/fleet-ingestion.md).
-- **Everything else stays simulated on purpose**: overview KPIs and the overview fleet-activity feed, the claims view, and all transaction actions are fixtures or dry-run toasts — this app never builds, signs, or submits a transaction today.
+- **The claims view is real when a sealed distribution is configured**: the GraveYield protocol settles salvages against a pre-salvage LP-holder snapshot (Merkle root sealed into the on-chain `PoolRegistry`); the salvage operator publishes the `grave-snapshotter` sealed artifact and the console ingests it through `/api/gy/claims` with the same four-state envelope discipline as the Graveyard (valid / stale / missing / corrupt), plus a whole-artifact integrity gate — every leaf and proof re-derives through the **vendored canonical SDK** (`src/lib/gy/vendor/graveyield-sdk/`, byte-pinned against `graveyield-protocol` with CI drift protection; the console implements no competing Merkle or claim math). Eligibility is verified against the ON-CHAIN registry root, the claimable amount mirrors the normative `claim_lp_proceeds.rs` formula (labeled as expected — the chain decides at claim time), and the claim action builds the canonical instruction, asks the connected wallet to sign, submits to **devnet**, and displays confirmed only after re-reading the on-chain `ClaimRecord` PDA. A prepared or submitted claim is never displayed as paid. See [`docs/claims-integration.md`](docs/claims-integration.md).
+- **Everything else stays simulated on purpose**: overview KPIs and the overview fleet-activity feed remain fixtures, and no transaction other than a wallet-signed devnet `claim_lp_proceeds` is ever built or submitted.
 
 ## Tech stack
 
@@ -80,11 +81,29 @@ GY_FLEET_MAX_AGE_MS="1800000"
 
 See [docs/fleet-ingestion.md](docs/fleet-ingestion.md) for the fleet ingestion runbook and state machine.
 
+Optional: configure the claims distribution source (none is set by default — with no source the LP Claims view honestly renders *snapshot unavailable*; eligibility is never guessed):
+
+```bash
+# serverless (Vercel etc.): HTTPS artifact store URL of the sealed distribution JSON
+GY_CLAIMS_URL="https://artifacts.example/gy/distribution.json"
+
+# self-hosted: path to the grave-snapshotter's sealed artifact on a mounted volume
+GY_CLAIMS_PATH="/var/lib/grave-snapshotter/distribution.json"
+
+# optional: freshness budget (ms; default 604800000 = 7 days) and RPC host
+GY_CLAIMS_MAX_AGE_MS="604800000"
+GY_CLAIMS_RPC_HOST="api.devnet.solana.com"
+```
+
+See [docs/claims-integration.md](docs/claims-integration.md) for the claims runbook, the state vocabulary, and the vendored-SDK contract.
+
 ```bash
 bun run lint       # eslint
 bun run test       # unit battery (bun test): estimator economics, criteria thresholds,
                    # snapshot artifact contract + transport (stale/invalid never fresh),
                    # fleet trail contract + transport (same invariant),
+                   # claims contract + transport (same invariant) + the claim state machine,
+                   # vendored-SDK drift pins (byte hashes, golden vector, live-cluster PDAs),
                    # program-ID pins, display formatters
 bun run build      # production build (typecheck enforced)
 ```
@@ -96,20 +115,26 @@ src/
 ├── app/
 │   ├── api/gy/snapshot/  # artifact transport route (GY_SNAPSHOT_URL | GY_SNAPSHOT_PATH)
 │   ├── api/gy/fleet/     # fleet trail transport route (GY_FLEET_STATE_PATH)
+│   ├── api/gy/claims/    # claims transport route (GY_CLAIMS_URL | GY_CLAIMS_PATH + ?wallet=)
 │   └── ...               # single-route console + providers
 ├── components/
 │   ├── gy/               # GraveYield views (overview, graveyard, fleet, claims, protocol) + shell/widgets
 │   └── ui/               # shadcn/ui primitives
 └── lib/
-    └── gy/               # domain: types · snapshot contract (isomorphic fail-closed parser) ·
-                          # transport envelope + client hydration gate · source resolver
-                          # (path/url, four-state) · committed artifact (contract test seed) ·
-                          # fleet contract (isomorphic fail-closed JSONL parsers, upstream
-                          # vocabulary transcribed) · fleet transport + hydration · fleet
-                          # source resolver (FLEET_STATE_DIR) · protocolLive (live devnet
-                          # config reads) · estimator (integer-exact fleet-core port) ·
-                          # simulated fixtures (overview feed only) · display formatters ·
-                          # __tests__ battery
+    ├── gy/               # domain: types · snapshot contract (isomorphic fail-closed parser) ·
+    │                     # transport envelope + client hydration gate · source resolver
+    │                     # (path/url, four-state) · committed artifact (contract test seed) ·
+    │                     # fleet contract (isomorphic fail-closed JSONL parsers, upstream
+    │                     # vocabulary transcribed) · fleet transport + hydration · fleet
+    │                     # source resolver (FLEET_STATE_DIR) · claims contract (sealed
+    │                     # artifact parser + SDK integrity gate + claim state machine) ·
+    │                     # claims transport + hydration · claims source resolver ·
+    │                     # claimsOnchain (live registry/receipt/claim-record reads) ·
+    │                     # protocolLive (live devnet config reads) · estimator (integer-exact
+    │                     # fleet-core port) · simulated fixtures (overview feed only) ·
+    │                     # display formatters · __tests__ battery
+    └── gy/vendor/graveyield-sdk/  # vendored canonical SDK (byte-pinned + golden-vector
+                                   # drift protection; server-only) — see PROVENANCE.md
 ```
 
 ## Related repositories
