@@ -380,7 +380,7 @@ function TopBar() {
             tone="warn"
             className="hidden sm:inline-flex"
           >
-            Mixed data — per-view labels: Graveyard real (snapshot), epoch live (RPC), fleet ingested or withheld (FLEET_STATE_DIR), claims/overview simulated
+            Mixed data — per-view labels: Graveyard real (snapshot), epoch live (RPC), fleet ingested or withheld (FLEET_STATE_DIR), claims real (sealed distribution + devnet), overview simulated
           </ToneBadge>
           <WalletButton />
         </div>

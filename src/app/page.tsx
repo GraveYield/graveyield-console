@@ -19,6 +19,11 @@ import {
   type SnapshotTransportPayload,
 } from "@/lib/gy/snapshotTransport";
 import {
+  hydrateClaimsPayload,
+  resolveDisplayClaimsPayload,
+  type ClaimsTransportPayload,
+} from "@/lib/gy/claimsTransport";
+import {
   hydrateFleetPayload,
   resolveDisplayFleetPayload,
   type FleetTransportPayload,
@@ -192,6 +197,64 @@ export default function GraveYieldConsole() {
           ? fleetTransport.reason
           : null;
 
+  /* P4.4 claims ingestion — the LP Claims view reads /api/gy/claims. Manual
+     refresh only (initial fetch on mount + the view's Refresh button); NO
+     polling. Same discipline as the snapshot/fleet transports: the payload
+     is re-validated client-side through the fail-closed envelope gate
+     (hydrateClaimsPayload); anything that fails renders as unavailable. The
+     wallet query rides as ?wallet= — a connected or explicitly pasted
+     address; the route answers only for THAT wallet (privacy). */
+  const [claimsTransport, setClaimsTransport] = useState<ClaimsTransportPayload | null>(null);
+  const [claimsLastGood, setClaimsLastGood] = useState<ClaimsTransportPayload | null>(null);
+  const [claimsLastGoodAtUnixMs, setClaimsLastGoodAtUnixMs] = useState<number | null>(null);
+  const [claimsLoading, setClaimsLoading] = useState(true);
+  const [claimsError, setClaimsError] = useState<"unreachable" | "malformed" | null>(null);
+  const [claimsRefreshing, setClaimsRefreshing] = useState(false);
+  const [claimsWallet, setClaimsWallet] = useState<string | null>(null);
+
+  const loadClaims = useCallback(async (wallet: string | null) => {
+    setClaimsRefreshing(true);
+    setClaimsError(null);
+    try {
+      const qs = wallet ? `?wallet=${encodeURIComponent(wallet)}` : "";
+      const res = await fetch(`/api/gy/claims${qs}`, { cache: "no-store" });
+      const json: unknown = await res.json();
+      const payload = hydrateClaimsPayload(json, Date.now());
+      setClaimsTransport(payload);
+      setClaimsError(payload === null ? "malformed" : null);
+      if (payload !== null && payload.distribution !== null) {
+        setClaimsLastGood(payload);
+        setClaimsLastGoodAtUnixMs(Date.now());
+      }
+    } catch {
+      setClaimsTransport(null);
+      setClaimsError("unreachable");
+      // D5: deliberately keep `claimsLastGood` — a failed refresh must not
+      // erase the data the operator was just looking at.
+    } finally {
+      setClaimsLoading(false);
+      setClaimsRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadClaims(claimsWallet);
+  }, [loadClaims, claimsWallet]);
+
+  /* Display derivation against the wall clock on every render — pure rule,
+     unit-tested in __tests__/claimsTransport.test.ts. */
+  const claimsDisplay = resolveDisplayClaimsPayload(claimsTransport, claimsLastGood, Date.now());
+  const claimsCachedAtUnixMs =
+    claimsDisplay !== null && claimsDisplay.dataState === "cached" ? claimsLastGoodAtUnixMs : null;
+  const claimsLatestFailure =
+    claimsError === "unreachable"
+      ? "the console could not reach /api/gy/claims"
+      : claimsError === "malformed"
+        ? "the transport payload failed client-side re-validation (fail-closed)"
+        : claimsTransport !== null && claimsTransport.distribution === null && claimsTransport.reason !== null
+          ? claimsTransport.reason
+          : null;
+
   return (
     <Shell active={view} onSelect={(v) => setView(v)}>
       {view === "overview" && <Overview pools={pools} events={events} />}
@@ -223,7 +286,20 @@ export default function GraveYieldConsole() {
           onRefresh={() => void loadFleet()}
         />
       )}
-      {view === "claims" && <Claims />}
+      {view === "claims" && (
+        <Claims
+          transport={claimsDisplay}
+          latestTransport={claimsTransport}
+          cachedAtUnixMs={claimsCachedAtUnixMs}
+          latestFailure={claimsLatestFailure}
+          loading={claimsLoading}
+          error={claimsError}
+          refreshing={claimsRefreshing}
+          onRefresh={() => void loadClaims(claimsWallet)}
+          walletQuery={claimsWallet}
+          onWalletQueryChange={setClaimsWallet}
+        />
+      )}
       {view === "protocol" && <Protocol />}
     </Shell>
   );

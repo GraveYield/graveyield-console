@@ -91,20 +91,6 @@ export interface BotEvent {
   level: "info" | "ok" | "warn";
 }
 
-export interface ClaimPosition {
-  poolAddress: string;
-  poolLabel: string;
-  holder: string;
-  /** LP balance at snapshot (raw). */
-  balanceAtSnapshot: number;
-  /** Holder share of the pool's LP supply at snapshot, in bps. */
-  shareBps: number;
-  /** Claimable lamports from lp_holder_pool_vault. */
-  claimableLamports: bigint;
-  claimed: boolean;
-  proofDepth: number;
-  root: string;
-}
 
 export interface Invariant {
   id: string;
