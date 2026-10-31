@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { type Transaction } from "@solana/web3.js";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -25,39 +25,41 @@ import type { ClaimsOnchain, ClaimsTransportPayload, WalletClaimViewPayload } fr
 import { PROGRAM_IDS } from "@/lib/gy/data";
 import { fmtSol, fmtUtcClock, shortAddr } from "@/lib/gy/format";
 import { cn } from "@/lib/utils";
+import {
+  TX_STATE_META,
+  initialTxState,
+  isTerminalTxState,
+  reduceTx,
+  type TxMachineState,
+} from "@/lib/gy/tx/machine";
+import {
+  blockhashExpired,
+  buildClaimTransaction,
+  deserializeClaimInstruction,
+  fetchFreshBlockhash,
+  simulateClaimTransaction,
+} from "@/lib/gy/tx/prepare";
+import {
+  awaitSignatureConfirmation,
+  reconcileClaimRecord,
+  type StatusConnection,
+} from "@/lib/gy/tx/reconcile";
 
-/* ── Transaction lifecycle — the client-side overlay ────────────────
+/* ── Transaction lifecycle (P4.5) — the shared state machine ────────
  *
- * The owner's vocabulary, exactly: prepared → submitted → confirmed | failed.
- * HONESTY RULES baked in:
- *   - "prepared"  means only that the canonical-SDK instruction exists and is
- *     unsigned — nothing moved, nothing was promised.
- *   - "submitted" means the wallet broadcast a transaction — it is NOT a
- *     payment and the UI never words it as one.
- *   - "confirmed" is displayed ONLY after the client itself re-reads the
- *     ClaimRecord PDA from devnet — the on-chain record, not the transport's
- *     word and not the proof's existence, is the paid evidence.
- *   - "failed"    means no claim happened; a note states no lamports moved
- *     unless an earlier confirmed record exists on-chain.
- */
-type TxStatus = "none" | "prepared" | "signing" | "submitted" | "confirmed" | "failed";
-
-const TX_STATUS_META: Record<TxStatus, { label: string; tone: "ok" | "info" | "warn" | "bad" | "muted" | "brand"; note: string }> = {
-  none: { label: "not prepared", tone: "muted", note: "" },
-  prepared: {
-    label: "transaction prepared",
-    tone: "info",
-    note: "The claim instruction is built from the sealed distribution via the canonical SDK. It is unsigned — nothing has moved.",
-  },
-  signing: { label: "awaiting wallet signature", tone: "info", note: "The wallet is asking for a signature — the claim is not submitted yet." },
-  submitted: {
-    label: "submitted — awaiting confirmation",
-    tone: "warn",
-    note: "The transaction was broadcast to devnet. Submitted is not paid — confirmation and the on-chain claim record are still pending.",
-  },
-  confirmed: { label: "confirmed", tone: "ok", note: "" },
-  failed: { label: "failed", tone: "bad", note: "The claim did not go through — no lamports moved (unless an earlier confirmed claim record exists on-chain)." },
-};
+ * The claim card no longer carries its own vocabulary: it drives the one
+ * console machine in src/lib/gy/tx/machine.ts —
+ *
+ *   not-prepared → prepared → simulated → awaiting-wallet-approval →
+ *   submitted → reconciling → confirmed | failed | confirmation-unknown
+ *
+ * The P4.4 honesty rules are unchanged and are now structural (machine
+ * transitions, test-pinned): prepared is unsigned, submitted is not paid,
+ * and "confirmed" is reachable ONLY through the reconciliation step — the
+ * console re-reading the ClaimRecord PDA from devnet. P4.5 adds the two
+ * stages the audit required: a real simulation of the exact transaction
+ * before approval, and "confirmation-unknown" as a first-class outcome that
+ * never masquerades as "failed" (a broadcast transaction may still settle). */
 
 const STATE_META: Record<WalletClaimViewPayload["state"], { label: string; tone: "ok" | "info" | "warn" | "bad" | "muted" | "brand" }> = {
   claimable: { label: "claimable", tone: "ok" },
@@ -365,16 +367,25 @@ function FactRow({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-/* ── Wallet claim card — the state machine, rendered honestly ──────── */
+/* ── Wallet claim card — the P4.5 machine, rendered honestly ──────────
+ * One operator action per stage: prepare+simulate → review → approve in
+ * wallet → the machine handles confirmation and reconciliation. */
 function WalletClaimCard({ view, onRefresh }: { view: WalletClaimViewPayload; onRefresh: () => void }) {
   const { publicKey, wallet } = useWallet();
   const { connection } = useConnection();
   const meta = STATE_META[view.state];
-  const [tx, setTx] = useState<TxStatus>(view.state === "claimable" ? "prepared" : "none");
-  const [txNote, setTxNote] = useState<string | null>(null);
-  const [signature, setSignature] = useState<string | null>(null);
-  const [confirmedOnChain, setConfirmedOnChain] = useState<boolean | null>(null);
-  const busy = tx === "signing" || tx === "submitted";
+  const [tx, setTx] = useState<TxMachineState>(() => initialTxState(Date.now()));
+  /** Retryable preparation hiccup (RPC unreachable, malformed payload) — the
+   * machine has no transition for it because NOTHING was wrong with the
+   * claim itself; the operator retries with no false "failed" claim. */
+  const [prepError, setPrepError] = useState<string | null>(null);
+  /** The exact unsigned transaction the RPC simulated — what the wallet will
+   * be asked to sign is byte-for-byte what was shown. */
+  const [staged, setStaged] = useState<{ tx: Transaction; blockhash: string; lastValidBlockHeight: number } | null>(null);
+  const [simulation, setSimulation] = useState<{ ok: boolean; error: string | null; logs: string[] | null } | null>(null);
+  /** A fresh machine run on explicit operator request after a terminal state. */
+  const [runId, setRunId] = useState(0);
+  const [running, setRunning] = useState(false);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -384,104 +395,255 @@ function WalletClaimCard({ view, onRefresh }: { view: WalletClaimViewPayload; on
     };
   }, []);
 
-  // The lifecycle resets per wallet+state payload: a fresh server view is the
-  // resting truth; the client overlay only rides on top of `claimable`.
+  const dispatch = useCallback((event: Parameters<typeof reduceTx>[1]) => {
+    setTx((prev) => reduceTx(prev, event, Date.now()));
+  }, []);
+
+  // The lifecycle resets per wallet+state payload and per explicit new run:
+  // a fresh server view is the resting truth; the client overlay only rides
+  // on top of `claimable`.
   useEffect(() => {
-    setTx(view.state === "claimable" ? "prepared" : "none");
-    setTxNote(null);
-    setSignature(null);
-    setConfirmedOnChain(null);
-  }, [view.wallet, view.state, view.claimableLamports]);
+    setTx(initialTxState(Date.now()));
+    setPrepError(null);
+    setStaged(null);
+    setSimulation(null);
+    setRunning(false);
+  }, [view.wallet, view.state, view.claimableLamports, runId]);
 
   const prepared = view.preparedClaim;
-  const canSign =
+  const canOperate =
     view.state === "claimable" &&
     prepared !== null &&
     publicKey !== null &&
     publicKey.toBase58() === view.wallet &&
-    tx !== "confirmed" &&
-    !busy;
+    !isTerminalTxState(tx.state) &&
+    !running;
+  /* The primary button advances the machine one stage at a time; it is only
+   * clickable in the three operator-decision states. */
+  const primaryEnabled =
+    canOperate &&
+    !running &&
+    (tx.state === "not-prepared" || tx.state === "prepared" || tx.state === "simulated");
 
-  const onClaim = useCallback(async () => {
-    if (!prepared || !publicKey || !connection) return;
-    const adapter = wallet?.adapter;
-    if (!adapter) return;
-    const pool = view.poolAddress;
-    if (!pool) {
-      setTx("failed");
-      setTxNote("The payload does not carry the distribution's pool — refusing to build a claim record lookup blindly.");
+  /* Stage the exact unsigned transaction: canonical-SDK instruction →
+   * fresh blockhash → transaction. Throws on malformed payload or RPC
+   * failure (fail-closed — nothing reaches the wallet unshown). */
+  const stage = useCallback(async () => {
+    if (!prepared || !connection || !publicKey) throw new Error("claim is not operable");
+    const ix = deserializeClaimInstruction(prepared);
+    const bh = await fetchFreshBlockhash(connection, "confirmed");
+    const stagedTx = buildClaimTransaction({
+      instruction: ix,
+      feePayer: publicKey,
+      blockhash: bh.blockhash,
+      lastValidBlockHeight: bh.lastValidBlockHeight,
+    });
+    setStaged({ tx: stagedTx, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight });
+    return stagedTx;
+  }, [prepared, connection, publicKey]);
+
+  const runSimulation = useCallback(
+    async (stagedTx: Transaction) => {
+      if (!connection) return;
+      const sim = await simulateClaimTransaction(connection, stagedTx);
+      setSimulation(sim);
+      if (sim.ok) {
+        dispatch({ type: "simulate-ok" });
+      } else {
+        dispatch({ type: "simulate-failed", reason: sim.error ?? "simulation failed" });
+      }
+    },
+    [connection, dispatch],
+  );
+
+  /* Stage 1 — not-prepared → prepared → simulated. */
+  const onPrepareAndSimulate = useCallback(async () => {
+    setPrepError(null);
+    if (!view.claimRecordPda) {
+      setPrepError("The payload carries no ClaimRecord PDA — the console will not build a claim it could not reconcile on-chain.");
       return;
     }
-    setTxNote(null);
+    setRunning(true);
     try {
-      setTx("signing");
-      // Rebuild the canonical SDK instruction client-side from the transport
-      // shape — the encoding was already proven against the golden vector.
-      const ix = new TransactionInstruction({
-        programId: new PublicKey(prepared.programId),
-        keys: prepared.keys.map((k) => ({
-          pubkey: new PublicKey(k.pubkey),
-          isSigner: k.isSigner,
-          isWritable: k.isWritable,
-        })),
-        data: Buffer.from(Uint8Array.from(atob(prepared.data), (c) => c.charCodeAt(0))),
-      });
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      const message = new Transaction({ feePayer: publicKey, blockhash, lastValidBlockHeight }).add(ix);
-      setTx("submitted");
-      // Wallet-adapter surface: the standard sendTransaction (signs + sends
-      // via the wallet), per @solana/wallet-adapter-base Adapter.
-      const sig = await adapter.sendTransaction(message, connection);
-      if (!mountedRef.current) return;
-      setSignature(sig);
-      // Bounded confirmation loop — manual, no silent infinite polling.
-      const deadline = Date.now() + 60_000;
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 2_000));
-        if (!mountedRef.current) return;
-        const statuses = await connection.getSignatureStatuses([sig]);
-        const st = statuses.value[0] ?? null;
-        if (st !== null) {
-          if (st.err !== null && st.err !== undefined) {
-            setTx("failed");
-            setTxNote(`Devnet rejected the claim: ${JSON.stringify(st.err)}`);
-            return;
-          }
-          if (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized") {
-            break;
-          }
-        }
-        if (Date.now() > deadline) {
-          setTx("failed");
-          setTxNote("Confirmation window elapsed — check the signature on Explorer; this console will not display paid without the on-chain record.");
-          return;
-        }
+      dispatch({ type: "prepare" });
+      const stagedTx = await stage();
+      await runSimulation(stagedTx);
+    } catch (e) {
+      setPrepError(String((e as Error).message ?? e));
+    } finally {
+      if (mountedRef.current) setRunning(false);
+    }
+  }, [dispatch, stage, runSimulation, view.claimRecordPda]);
+
+  /* Stage 1b — prepared → simulated (after a prep hiccup or a re-prepare). */
+  const onRetrySimulation = useCallback(async () => {
+    setPrepError(null);
+    setRunning(true);
+    try {
+      const stagedTx = await stage();
+      await runSimulation(stagedTx);
+    } catch (e) {
+      setPrepError(String((e as Error).message ?? e));
+    } finally {
+      if (mountedRef.current) setRunning(false);
+    }
+  }, [stage, runSimulation]);
+
+  /* Stage 2 — simulated → awaiting-wallet-approval → submitted. The blockhash
+   * is re-checked at approval time: one that expired before the wallet was
+   * asked is re-prepared, never submitted hoping it still lands. */
+  const onApproveAndSubmit = useCallback(async () => {
+    const adapter = wallet?.adapter;
+    if (!adapter || !staged || !connection) return;
+    if (tx.state !== "simulated") return; // one stage per click — never a hidden re-submit
+    setPrepError(null);
+    setRunning(true);
+    try {
+      let height: number | null = null;
+      try {
+        height = await connection.getBlockHeight("confirmed");
+      } catch {
+        height = null; // unreadable — the send path reports any real failure
       }
-      // THE HONESTY GATE: "confirmed" is only shown after the console itself
-      // re-reads the ClaimRecord PDA (server-derived by the canonical SDK)
-      // from devnet. A transaction confirming is not evidence a claim was
-      // paid — the record is.
-      if (!view.claimRecordPda) {
-        setTx("failed");
-        setTxNote("The payload carries no ClaimRecord PDA — the console will not display a paid claim it cannot verify on-chain.");
+      if (height !== null && blockhashExpired(staged.lastValidBlockHeight, height)) {
+        dispatch({ type: "re-prepare", reason: "blockhash expired before approval" });
+        setStaged(null);
+        setSimulation(null);
+        setPrepError("The prepared blockhash expired before approval — the claim was re-prepared with a fresh one. Review and approve again.");
         return;
       }
-      const info = await connection.getAccountInfo(new PublicKey(view.claimRecordPda));
-      if (!mountedRef.current) return;
-      if (info !== null) {
-        setConfirmedOnChain(true);
-        setTx("confirmed");
-        onRefresh();
-      } else {
-        setTx("failed");
-        setTxNote("Transaction confirmed but the ClaimRecord PDA is absent — the console will not display a paid claim without the on-chain record.");
+      dispatch({ type: "request-approval" });
+      try {
+        const sig = await adapter.sendTransaction(staged.tx, connection);
+        if (!mountedRef.current) return;
+        dispatch({ type: "submit-ok", signature: sig });
+      } catch (e) {
+        if (!mountedRef.current) return;
+        const msg = String((e as Error).message ?? e);
+        const rejected = /reject|denied|cancel|dismiss/i.test(msg);
+        dispatch(rejected ? { type: "wallet-rejected", reason: msg } : { type: "submit-failed", reason: msg });
       }
-    } catch (e) {
-      if (!mountedRef.current) return;
-      setTx("failed");
-      setTxNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (mountedRef.current) setRunning(false);
     }
-  }, [prepared, publicKey, connection, wallet?.adapter, onRefresh, view.poolAddress]);
+  }, [wallet?.adapter, staged, connection, tx.signature, dispatch]);
+
+  /* Stage 3 — submitted → reconciling | failed | confirmation-unknown. */
+  useEffect(() => {
+    if (tx.state !== "submitted" || tx.signature === null || !connection) return;
+    let cancelled = false;
+    void (async () => {
+      const outcome = await awaitSignatureConfirmation(connection as unknown as StatusConnection, tx.signature as string, {
+        timeoutMs: 60_000,
+        pollMs: 2_000,
+        isAborted: () => cancelled,
+      });
+      if (cancelled) return;
+      if (outcome.kind === "seen") {
+        dispatch({ type: "confirm-seen", commitment: outcome.commitment });
+      } else if (outcome.kind === "on-chain-failed") {
+        dispatch({ type: "on-chain-failed", reason: `Devnet rejected the claim: ${outcome.err}` });
+      } else {
+        dispatch({ type: "confirm-timeout" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tx.state, tx.signature, connection, dispatch]);
+
+  /* Stage 4 — the honesty gate: reconciling → confirmed | failed | unknown. */
+  useEffect(() => {
+    if (tx.state !== "reconciling" || !connection) return;
+    let cancelled = false;
+    void (async () => {
+      if (!view.claimRecordPda) {
+        dispatch({
+          type: "reconcile-absent",
+          reason: "The payload carries no ClaimRecord PDA — the console will not display a paid claim it cannot verify on-chain.",
+        });
+        return;
+      }
+      const rec = await reconcileClaimRecord(connection as unknown as StatusConnection, view.claimRecordPda);
+      if (cancelled) return;
+      if (rec.kind === "found") {
+        dispatch({ type: "reconcile-found", atUnixMs: rec.atUnixMs });
+        onRefresh();
+      } else if (rec.kind === "absent") {
+        dispatch({
+          type: "reconcile-absent",
+          reason: "Transaction confirmed but the ClaimRecord PDA is absent — the console will not display a paid claim without the on-chain record.",
+        });
+      } else {
+        dispatch({
+          type: "reconcile-inconclusive",
+          reason: `The ClaimRecord read failed (${rec.error}) — that is unknown, not failed; re-check to retry the reconciliation.`,
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tx.state, connection, view.claimRecordPda, dispatch, onRefresh]);
+
+  /* Recovery — confirmation-unknown → (re-check) reconciling. */
+  const onRecheck = useCallback(async () => {
+    if (tx.signature === null || !connection) return;
+    setRunning(true);
+    try {
+      const outcome = await awaitSignatureConfirmation(connection as unknown as StatusConnection, tx.signature, {
+        timeoutMs: 30_000,
+        pollMs: 2_000,
+      });
+      if (!mountedRef.current) return;
+      if (outcome.kind === "seen") {
+        dispatch({ type: "confirm-seen", commitment: outcome.commitment });
+      } else if (outcome.kind === "on-chain-failed") {
+        dispatch({ type: "on-chain-failed", reason: `Devnet rejected the claim: ${outcome.err}` });
+      } else {
+        setPrepError("Still unseen — the transaction may settle later. Check Explorer; the console keeps displaying unknown.");
+      }
+    } finally {
+      if (mountedRef.current) setRunning(false);
+    }
+  }, [tx.signature, connection, dispatch]);
+
+  const onReprepare = useCallback(() => {
+    setPrepError(null);
+    setStaged(null);
+    setSimulation(null);
+    dispatch({ type: "re-prepare", reason: "operator: fresh blockhash after an unknown confirmation" });
+  }, [dispatch]);
+
+  const actionLabel =
+    tx.state === "not-prepared"
+      ? "Claim proceeds (devnet)"
+      : tx.state === "prepared"
+        ? "Simulate on devnet"
+        : tx.state === "simulated"
+          ? "Approve in wallet & submit"
+          : tx.state === "awaiting-wallet-approval"
+            ? "Awaiting signature…"
+            : tx.state === "submitted"
+              ? "Submitted…"
+              : tx.state === "reconciling"
+                ? "Reconciling…"
+                : "Claim proceeds";
+
+  const onPrimary = useCallback(() => {
+    if (tx.state === "not-prepared" || tx.state === "prepared") {
+      void (tx.state === "not-prepared" ? onPrepareAndSimulate() : onRetrySimulation());
+      return;
+    }
+    if (tx.state === "simulated") {
+      void onApproveAndSubmit();
+      return;
+    }
+    if (tx.state === "submitted" || tx.state === "awaiting-wallet-approval") {
+      if (tx.signature !== null) dispatch({ type: "duplicate-submit-refused" });
+      return;
+    }
+  }, [tx.state, tx.signature, onPrepareAndSimulate, onRetrySimulation, onApproveAndSubmit, dispatch]);
 
   return (
     <div className="space-y-3">
@@ -519,22 +681,67 @@ function WalletClaimCard({ view, onRefresh }: { view: WalletClaimViewPayload; on
               <div className="flex flex-col items-end gap-1">
                 <Button
                   className="min-h-11 bg-emerald-500 font-semibold text-emerald-950 hover:bg-emerald-400 disabled:opacity-40"
-                  disabled={!canSign}
-                  onClick={() => void onClaim()}
+                  disabled={!primaryEnabled}
+                  onClick={onPrimary}
                 >
                   <HandCoins className="mr-2 h-4 w-4" />
-                  {tx === "prepared" ? "Claim proceeds (devnet)" : tx === "signing" ? "Awaiting signature…" : tx === "submitted" ? "Submitted…" : "Claim proceeds"}
+                  {running && (tx.state === "not-prepared" || tx.state === "prepared") ? "Preparing…" : actionLabel}
                 </Button>
                 {publicKey?.toBase58() !== view.wallet && (
                   <p className="text-[10.5px] text-amber-300/80">Connect as {shortAddr(view.wallet, 4, 4)} to sign this claim.</p>
                 )}
               </div>
             </div>
-            <TxStatusRow status={tx} note={txNote} signature={signature} />
-            {confirmedOnChain === true && (
-              <p className="flex items-center gap-1.5 text-[11px] text-emerald-300">
-                <ShieldCheck className="h-3.5 w-3.5" />
-                ClaimRecord PDA re-read from devnet — the claim is on-chain record-backed.
+
+            {/* The exact unsigned transaction the wallet will see — shown
+                before approval, never after the fact. */}
+            {staged !== null && (
+              <div className="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2.5 font-mono text-[10.5px] text-slate-400">
+                staged · program {shortAddr(prepared?.programId ?? "", 6, 6)} · blockhash {shortAddr(staged.blockhash, 6, 6)} · valid until slot{" "}
+                {staged.lastValidBlockHeight.toLocaleString()} · unsigned
+              </div>
+            )}
+
+            <TxStatusRow tx={tx} simulation={simulation} />
+
+            {tx.state === "confirmation-unknown" && (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20"
+                  disabled={running}
+                  onClick={() => void onRecheck()}
+                >
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                  Re-check confirmation
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                  disabled={running}
+                  onClick={onReprepare}
+                >
+                  Re-prepare with fresh blockhash
+                </Button>
+              </div>
+            )}
+
+            {tx.state === "failed" && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                onClick={() => setRunId((r) => r + 1)}
+              >
+                Start a new claim run
+              </Button>
+            )}
+
+            {prepError !== null && (
+              <p className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-[11.5px] leading-relaxed text-amber-200">
+                {prepError}
               </p>
             )}
           </div>
@@ -576,27 +783,57 @@ function WalletClaimCard({ view, onRefresh }: { view: WalletClaimViewPayload; on
   );
 }
 
-/* ── Tx status row — prepared / submitted / confirmed / failed ─────── */
-function TxStatusRow({ status, note, signature }: { status: TxStatus; note: string | null; signature: string | null }) {
-  const meta = TX_STATUS_META[status];
+/* ── Tx status row — the shared machine's vocabulary ──────────────────
+ * Every state renders its honest standing note; failures render their
+ * reason; the tracked signature links to Explorer. Simulation logs are
+ * shown verbatim when devnet reported any. */
+function TxStatusRow({
+  tx,
+  simulation,
+}: {
+  tx: TxMachineState;
+  simulation: { ok: boolean; error: string | null; logs: string[] | null } | null;
+}) {
+  const meta = TX_STATE_META[tx.state];
+  const signature = tx.signature;
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2.5">
-      {status === "confirmed" && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />}
-      {status === "failed" && <XCircle className="h-3.5 w-3.5 shrink-0 text-red-400" />}
-      {(status === "submitted" || status === "signing") && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-300" />}
-      {status === "prepared" && <Info className="h-3.5 w-3.5 shrink-0 text-cyan-400" />}
-      {status === "none" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
-      <ToneBadge tone={meta.tone}>{meta.label}</ToneBadge>
-      <p className="text-[11px] leading-relaxed text-slate-400">{note ?? meta.note}</p>
-      {signature !== null && (
-        <a
-          className="ml-auto font-mono text-[10.5px] text-cyan-300 underline-offset-2 hover:underline"
-          href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`}
-          target="_blank"
-          rel="noreferrer"
-        >
-          tx {shortAddr(signature, 6, 6)} ↗
-        </a>
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2.5">
+        {tx.state === "confirmed" && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />}
+        {tx.state === "failed" && <XCircle className="h-3.5 w-3.5 shrink-0 text-red-400" />}
+        {(tx.state === "submitted" || tx.state === "reconciling" || tx.state === "awaiting-wallet-approval") && (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-300" />
+        )}
+        {(tx.state === "prepared" || tx.state === "simulated") && <Info className="h-3.5 w-3.5 shrink-0 text-cyan-400" />}
+        {tx.state === "not-prepared" && <CircleDashed className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
+        {tx.state === "confirmation-unknown" && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-300" />}
+        <ToneBadge tone={meta.tone}>{meta.label}</ToneBadge>
+        <p className="text-[11px] leading-relaxed text-slate-400">{tx.reason ?? meta.note}</p>
+        {signature !== null && (
+          <a
+            className="ml-auto font-mono text-[10.5px] text-cyan-300 underline-offset-2 hover:underline"
+            href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            tx {shortAddr(signature, 6, 6)} ↗
+          </a>
+        )}
+      </div>
+      {simulation !== null && (simulation.ok || simulation.error !== null) && (
+        <div className="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 font-mono text-[10.5px] leading-relaxed text-slate-400">
+          simulation {simulation.ok ? "passed — devnet dry-ran the exact unsigned transaction with no error" : `failed — ${simulation.error ?? "unknown error"}`}
+          {simulation.logs !== null && simulation.logs.length > 0 && (
+            <span className="mt-1 block whitespace-pre-wrap text-slate-500">{simulation.logs.slice(-6).join("\n")}</span>
+          )}
+        </div>
+      )}
+      {(tx.reprepareCount > 0 || tx.duplicateSuppressedCount > 0 || tx.signatureHistory.length > 1) && (
+        <p className="font-mono text-[10px] text-slate-500">
+          {tx.signatureHistory.length > 1 ? `signature attempts ${tx.signatureHistory.length}` : null}
+          {tx.reprepareCount > 0 ? `${tx.signatureHistory.length > 1 ? " · " : ""}re-prepared ×${tx.reprepareCount}` : null}
+          {tx.duplicateSuppressedCount > 0 ? `${tx.reprepareCount > 0 || tx.signatureHistory.length > 1 ? " · " : ""}duplicate submits suppressed ×${tx.duplicateSuppressedCount}` : null}
+        </p>
       )}
     </div>
   );
