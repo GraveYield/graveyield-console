@@ -48,14 +48,18 @@ export function ToneBadge({
   children,
   dot,
   className,
+  title,
 }: {
   tone: Tone;
   children: React.ReactNode;
   dot?: boolean;
   className?: string;
+  /* full-disclosure tooltip (used by the short header badge) */
+  title?: string;
 }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium tracking-wide",
         TONE_CHIP[tone],
@@ -206,7 +210,7 @@ export function CopyChip({ text, label }: { text: string; label?: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 1400);
       }}
-      className="group inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2 py-1 font-mono text-[11px] text-slate-300 transition-colors hover:border-emerald-500/40 hover:text-emerald-300"
+      className="group inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2 py-1 font-mono text-[11px] text-slate-300 transition-colors hover:border-emerald-500/40 hover:text-emerald-300"
       aria-label={label ?? `Copy ${text}`}
     >
       {/* min-w-0 lets the ID shrink + ellipsize inside flex; copy still uses full text */}
