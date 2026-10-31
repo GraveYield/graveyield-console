@@ -6,7 +6,7 @@ import { Overview } from "@/components/gy/overview";
 import { Graveyard } from "@/components/gy/graveyard";
 import { Fleet } from "@/components/gy/fleet";
 import { Claims } from "@/components/gy/claims";
-import { Protocol } from "@/components/gy/protocol";
+import { Protocol, type IndexerHealthSummary } from "@/components/gy/protocol";
 import {
   EVENT_GENERATOR,
   INITIAL_EVENTS,
@@ -255,6 +255,28 @@ export default function GraveYieldConsole() {
           ? claimsTransport.reason
           : null;
 
+  /* P4.5 — indexer health for the Protocol view: the P4.1 transport's own
+   * four-state verdict, counts and per-stage failures, from the display
+   * payload (falling back to the raw latest check for its diagnostics). */
+  const snapshotHealth: IndexerHealthSummary | null = useMemo(() => {
+    const p = display ?? transport;
+    if (!p) return null;
+    const snap = p.snapshot;
+    return {
+      artifactState: p.artifactState,
+      dataState: p.dataState,
+      checkedAtUnixMs: p.checkedAtUnixMs,
+      ageMs: p.ageMs,
+      maxAgeMs: p.maxAgeMs,
+      cluster: snap?.cluster ?? null,
+      indexerGitHead: snap?.indexerGitHead ?? null,
+      counts: snap?.counts ?? null,
+      failures: snap?.failures ?? [],
+      reason: p.reason,
+      sourceKind: p.source.kind,
+    };
+  }, [display, transport]);
+
   return (
     <Shell active={view} onSelect={(v) => setView(v)}>
       {view === "overview" && <Overview pools={pools} events={events} />}
@@ -300,7 +322,7 @@ export default function GraveYieldConsole() {
           onWalletQueryChange={setClaimsWallet}
         />
       )}
-      {view === "protocol" && <Protocol />}
+      {view === "protocol" && <Protocol snapshotHealth={snapshotHealth} />}
     </Shell>
   );
 }

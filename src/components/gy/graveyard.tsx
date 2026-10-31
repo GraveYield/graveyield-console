@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Card,
   CardContent,
@@ -16,25 +16,21 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { Slider } from "@/components/ui/slider";
-import { useToast } from "@/hooks/use-toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   ArrowLeft,
   ArrowUpDown,
   Clock3,
   FlaskConical,
   Hourglass,
+  Info,
   PlayCircle,
   RefreshCw,
   Rocket,
@@ -44,6 +40,7 @@ import {
 import { CriteriaChips, SectionHead, ToneBadge, CopyChip, criterionTone, useNow } from "./widgets";
 import type { Pool, PoolState } from "@/lib/gy/types";
 import { criteriaOf, estimateSalvageEconomics, WSOL_MINT } from "@/lib/gy/estimator";
+import { fetchProtocolPulse, type ProtocolPulse } from "@/lib/gy/protocolLive";
 import { snapshotCriteriaOf, type ConsoleSnapshot } from "@/lib/gy/snapshotContract";
 import type { SnapshotTransportPayload } from "@/lib/gy/snapshotTransport";
 import { fmtDuration, fmtNum, fmtSol, fmtUtcClock, formatCollapseCell, formatIdleDaysCell, POOL_STATE_META, shortAddr } from "@/lib/gy/format";
@@ -104,7 +101,6 @@ export function Graveyard({
   selected: Pool | null;
   onSelect: (p: Pool | null) => void;
 }) {
-  const { toast } = useToast();
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   // Snapshot rows carry no fabricated score — default to sorting by real TVL.
@@ -343,7 +339,6 @@ export function Graveyard({
           snapshot={snapshot}
           open={!!selected}
           onClose={() => onSelect(null)}
-          toast={toast}
         />
       )}
     </div>
@@ -554,13 +549,11 @@ function PoolSheet({
   snapshot,
   open,
   onClose,
-  toast,
 }: {
   pool: Pool;
   snapshot: ConsoleSnapshot;
   open: boolean;
   onClose: () => void;
-  toast: ReturnType<typeof useToast>["toast"];
 }) {
   const now = useNow();
   const criteria = useMemo(
@@ -573,8 +566,58 @@ function PoolSheet({
   const [lpPct, setLpPct] = useState([100]);
   const [slippageOverride, setSlippageOverride] = useState<number>(300);
 
+  /* P4.5 (audit F7): the estimate's economics come from the LIVE vault
+   * ProtocolConfig — shares, slippage ceiling, dust threshold, priority-fee
+   * ceiling — never from baked-in constants. One read per sheet open (no
+   * polling); an unreachable config WITHHOLDS the estimate (fail-closed):
+   * it never falls back to hardcoded economics. */
+  const [pulse, setPulse] = useState<ProtocolPulse | null>(null);
+  const [pulseError, setPulseError] = useState<string | null>(null);
+  const [pulseLoading, setPulseLoading] = useState(false);
+  const refreshPulse = useCallback(() => {
+    setPulseLoading(true);
+    fetchProtocolPulse()
+      .then((p) => {
+        setPulse(p);
+        setPulseError(null);
+      })
+      .catch((err) => setPulseError(String((err as Error).message ?? err).slice(0, 140)))
+      .finally(() => setPulseLoading(false));
+  }, []);
+  useEffect(() => {
+    if (open) refreshPulse();
+  }, [open, refreshPulse]);
+
+  const vaultConfig = pulse?.vault.config ?? null;
+  const slippageMax = vaultConfig?.maxSlippageBps ?? 300;
+  /* Clamp the operator's override to the live ceiling when it arrives. */
+  useEffect(() => {
+    setSlippageOverride((prev) => Math.min(prev, slippageMax));
+  }, [slippageMax]);
+
+  /* Read-only re-evaluation (P4.5): the Evaluate action runs the console's
+   * evaluation at click time and timestamps the result — a real event, not
+   * a fabricated "queued" toast. */
+  const [evalOpen, setEvalOpen] = useState(false);
+  const [evalAt, setEvalAt] = useState<number | null>(null);
+  const evalCriteria = useMemo(
+    () =>
+      evalAt === null
+        ? []
+        : pool.snapshotCriteria
+          ? snapshotCriteriaOf(pool, evalAt, snapshot)
+          : criteriaOf(pool, evalAt, null),
+    [evalAt, pool, snapshot],
+  );
+  const openEvaluate = useCallback(() => {
+    setEvalAt(Date.now());
+    setEvalOpen(true);
+  }, []);
+
   const estimate = useMemo(() => {
-    // Full-reserve quote at pool price — indicative, integer-exact.
+    if (vaultConfig === null) return null;
+    // Full-reserve quote at pool price — indicative, integer-exact, and
+    // labeled as indicative in the UI (not a live route quote).
     const quoteOut = pool.quoteReserveLamports;
     const quoteIn = pool.baseReserve;
     return estimateSalvageEconomics({
@@ -591,22 +634,27 @@ function PoolSheet({
       quoteOutLamports: quoteOut,
       salvorLpAmount: BigInt(Math.max(1, Math.floor((pool.lpSupply * lpPct[0]) / 100))),
       config: {
-        salvorShareBps: 4000,
-        maxSlippageBps: 300,
-        jupiterDustThresholdLamports: 10_000n,
+        salvorShareBps: vaultConfig.salvorShareBps,
+        maxSlippageBps: vaultConfig.maxSlippageBps,
+        jupiterDustThresholdLamports: BigInt(vaultConfig.jupiterDustThresholdLamports),
       },
       costs: {
-        priorityFeeBudgetLamports: 3_000_000n, // D3 plan — Charter-guarded
+        // Worst case at the LIVE Charter ceiling (7008) — the console does
+        // not guess the salvor's fee plan; it prices the ceiling the
+        // protocol enforces.
+        priorityFeeBudgetLamports: BigInt(vaultConfig.maxPriorityFeeCeilingLamports),
+        // fee payer + salvor signer in the salvage transaction.
         signatureCount: 2,
-        frontedRentLamports: 1_441_080n,
+        // fleet-core DEFAULT_TUNABLES.frontedRentLamports — the fleet's own
+        // documented cost-model constant, not an invented number.
+        frontedRentLamports: 1_000_000n,
       },
       slippageBpsOverride: slippageOverride,
       minNetProfitLamports: 0n,
     });
-  }, [pool, lpPct, slippageOverride]);
+  }, [pool, lpPct, slippageOverride, vaultConfig]);
 
   const certMsLeft = pool.certExpiresAt && now ? pool.certExpiresAt - now : null;
-  const actionable = pool.state === "certification-ready" || pool.state === "certified";
 
   /* Browser/OS back button closes the sheet instead of leaving the app. */
   const onCloseRef = useRef(onClose);
@@ -789,7 +837,7 @@ function PoolSheet({
                 </div>
                 <div>
                   <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span>Slippage floor (≤ config 300 bps)</span>
+                    <span>Slippage floor (≤ live config {slippageMax} bps)</span>
                     <span className="font-mono tabular-nums text-slate-200">
                       {slippageOverride} bps
                     </span>
@@ -797,15 +845,26 @@ function PoolSheet({
                   <Slider
                     value={[slippageOverride]}
                     onValueChange={(v) => setSlippageOverride(v[0])}
-                    min={50}
-                    max={300}
+                    min={Math.min(50, slippageMax)}
+                    max={slippageMax}
                     step={10}
                     className="mt-2"
                     aria-label="Slippage override"
                   />
                 </div>
 
-                {estimate.status === "reject" ? (
+                {vaultConfig === null ? (
+                  <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-300">
+                    Estimate unavailable — the live vault ProtocolConfig could not be read
+                    {pulseLoading ? " (reading…)" : pulseError ? ` (${pulseError})` : ""}. The console does not
+                    estimate with baked-in economics: shares, slippage ceiling, dust floor and the fee ceiling are read
+                    from devnet (audit F7), and without them nothing is computed.
+                  </p>
+                ) : estimate === null ? (
+                  <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                    Estimate unavailable.
+                  </p>
+                ) : estimate.status === "reject" ? (
                   <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
                     reject — {estimate.reason}
                   </p>
@@ -827,7 +886,7 @@ function PoolSheet({
                       strong
                     />
                     <Row
-                      k="salvor share (40%)"
+                      k={`salvor share (${(vaultConfig.salvorShareBps / 100).toLocaleString()}% live)`}
                       v={`${fmtSol(estimate.salvorGrossShareLamports ?? 0n)} SOL`}
                       tone="text-cyan-300"
                     />
@@ -853,79 +912,91 @@ function PoolSheet({
                     />
                   </div>
                 )}
+                <div className="space-y-1.5 text-[11px] leading-relaxed text-slate-500">
+                  <p className="flex items-start gap-1.5">
+                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    Quote provenance: indicative full-reserve quote at pool price — NOT a live route quote. The fleet&apos;s
+                    live quotes come from a Jupiter route adapter; this sheet prices the ceiling the protocol enforces
+                    (priority fee at the live Charter ceiling, fronted rent per fleet-core&apos;s cost model), dry-run only.
+                  </p>
+                </div>
               </CardContent>
             </Card>
           </section>
 
-          {/* Actions */}
+          {/* Actions (P4.5) — honest scoping. Evaluate is a real read-only
+              re-evaluation at click time (the fabricated "Dry-run queued"
+              toast is gone); certify & salvage is disabled for submission
+              with the reason, and the old "Simulated" toast — which implied
+              a simulation had run — is gone with it. */}
           <section>
             <SheetSectionTitle icon={Rocket}>Salvor actions</SheetSectionTitle>
             <div className="flex flex-col gap-2.5 sm:flex-row">
               <Button
                 variant="outline"
                 className="min-h-11 flex-1 border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 hover:text-cyan-100"
-                onClick={() =>
-                  toast({
-                    title: "Dry-run queued",
-                    description: `${pool.baseSymbol} re-evaluated read-only — nothing submitted.`,
-                  })
-                }
+                onClick={openEvaluate}
               >
                 <PlayCircle className="mr-2 h-4 w-4" />
                 Evaluate (dry-run)
               </Button>
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    className="min-h-11 flex-1 bg-emerald-500 font-semibold text-emerald-950 hover:bg-emerald-400 disabled:opacity-40"
-                    disabled={!actionable}
-                  >
-                    <Rocket className="mr-2 h-4 w-4" />
-                    Certify &amp; salvage
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent className="border-white/10 bg-[#1E1E1E] text-foreground">
-                  <AlertDialogHeader>
-                    <AlertDialogTitle className="font-display">
-                      Submit certify-and-salvage?
-                    </AlertDialogTitle>
-                    <AlertDialogDescription className="leading-relaxed text-slate-400">
-                      Bundles <span className="font-mono text-slate-300">evaluate_pool_phase_2</span>{" "}
-                      + <span className="font-mono text-slate-300">salvage_pool</span> into one
-                      atomic transaction. If any check fails, everything reverts.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel className="border-white/10 bg-transparent text-slate-300 hover:bg-white/5">
-                      Cancel
-                    </AlertDialogCancel>
-                    <AlertDialogAction
-                      className="bg-emerald-500 font-semibold text-emerald-950 hover:bg-emerald-400"
-                      onClick={() =>
-                        toast({
-                          title: "Simulated",
-                          description: "Devnet executors stay dry-run — nothing was submitted.",
-                        })
-                      }
-                    >
-                      Simulate
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+              <Button
+                className="min-h-11 flex-1 bg-emerald-500 font-semibold text-emerald-950 opacity-50 hover:bg-emerald-500"
+                disabled
+              >
+                <Rocket className="mr-2 h-4 w-4" />
+                Certify &amp; salvage
+              </Button>
             </div>
-            {!actionable && (
-              <p className="mt-2 flex items-start gap-1.5 text-[11.5px] leading-relaxed text-slate-500">
-                <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                Unlocks when the pool is certification-ready or certified.
-              </p>
-            )}
+            <p className="mt-2 flex items-start gap-1.5 text-[11.5px] leading-relaxed text-slate-500">
+              <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Certify &amp; salvage is disabled for submission — out of console scope. A valid evaluation requires a
+              fresh oracle-signed attestation inside the ~512-slot SlotHashes window (6026/6029 otherwise), which a
+              browser cannot produce; the documented path is the indexer&apos;s EvidenceBundle and the salvor fleet&apos;s
+              pipeline. The console stays out of the settlement-signing business.
+            </p>
             {pool.note && (
               <p className="mt-3 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-slate-400">
                 {pool.note}
               </p>
             )}
           </section>
+
+          {/* Evaluate dialog — the console's read-only evaluation, run at
+              click time and stamped with when it ran. Not the on-chain
+              evaluate_pool_phase_1: that needs a fresh oracle attestation a
+              browser cannot mint. Nothing was submitted; nothing queued. */}
+          <Dialog open={evalOpen} onOpenChange={setEvalOpen}>
+            <DialogContent className="border-white/10 bg-[#1E1E1E] text-foreground sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="font-display">
+                  Read-only re-evaluation — {pool.baseSymbol} / {pool.quoteSymbol}
+                </DialogTitle>
+                <DialogDescription className="leading-relaxed text-slate-400">
+                  {evalAt !== null
+                    ? `Evaluated at ${fmtUtcClock(new Date(evalAt))} UTC against the indexer snapshot — the same fail-closed evaluation the Graveyard renders, re-run at click time.`
+                    : "Evaluated against the indexer snapshot."}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {evalCriteria.map((c) => (
+                    <ToneBadge key={c.id} tone={criterionTone(c.state)}>
+                      {c.id} {c.state}
+                    </ToneBadge>
+                  ))}
+                </div>
+                <p className="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2.5 text-[12px] leading-relaxed text-slate-400">
+                  This is the console&apos;s snapshot-side evaluation only. The on-chain{" "}
+                  <span className="font-mono text-slate-300">evaluate_pool_phase_1/2</span> requires a fresh
+                  oracle-signed attestation valid within the ~512-slot SlotHashes window — a browser cannot produce one
+                  (the 6024–6029 error family exists for exactly this). The documented path is the indexer&apos;s{" "}
+                  <span className="font-mono text-slate-300">EvidenceBundle</span> and the salvor fleet&apos;s pipeline.
+                  Nothing was submitted; nothing was queued.
+                </p>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
       </SheetContent>
     </Sheet>
