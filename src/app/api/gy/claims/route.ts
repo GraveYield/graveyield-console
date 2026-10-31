@@ -25,7 +25,14 @@
 import { readFile, stat } from "node:fs/promises";
 
 import { resolveClaimsSource } from "@/lib/gy/claimsSource";
-import { walletClaimView, type WalletClaimInput } from "@/lib/gy/claimsContract";
+import {
+  canonicalQueryWallet,
+  walletClaimView,
+  type RegistryFacts,
+  type WalletClaimInput,
+  type WalletClaimRecord,
+  type WalletClaimView,
+} from "@/lib/gy/claimsContract";
 import { readClaimsOnchain, DEFAULT_CLAIMS_RPC_HOST } from "@/lib/gy/claimsOnchain";
 import { PROGRAM_IDS } from "@/lib/gy/data";
 
@@ -34,14 +41,16 @@ import { PROGRAM_IDS } from "@/lib/gy/data";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-
 export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const walletParam = url.searchParams.get("wallet");
   // An invalid wallet parameter is refused with the same envelope (wallet:
-  // null) — never guessed, never echoed as data.
-  const wallet = walletParam !== null && PUBKEY_RE.test(walletParam) ? walletParam : null;
+  // null) — never guessed, never echoed as data. SECURITY (review
+  // 2026-10-31, F1): "invalid" means the REAL PublicKey gate, not just the
+  // base58 regex — canonicalQueryWallet rejects regex-passing strings that
+  // do not decode to exactly 32 bytes, which previously crashed the route
+  // with an unhandled 500 once a distribution artifact was configured.
+  const wallet = canonicalQueryWallet(walletParam);
 
   // 1. Distribution artifact (four-state envelope + server-side artifact).
   const resolution = await resolveClaimsSource(
@@ -64,17 +73,40 @@ export async function GET(request: Request): Promise<Response> {
   // 2. On-chain settlement facts — only meaningful when the artifact named a
   //    pool; otherwise the payload carries the envelope's honest reason and
   //    no on-chain half (we do not know WHICH settlement to read).
-  let onchain = null;
-  let walletView = null;
+  //    SECURITY (review 2026-10-31, F2b): the on-chain read and the wallet
+  //    state machine are wrapped — ANY failure they throw degrades to the
+  //    honest envelope (no onchain half; wallet → snapshot-unavailable),
+  //    never to an HTTP 500. The four-state contract survives every single
+  //    component failure.
+  let onchain: Awaited<ReturnType<typeof readClaimsOnchain>>["onchain"] | null = null;
+  let walletView: WalletClaimView | null = null;
   const artifact = resolution.artifact;
 
   if (artifact !== null) {
-    const read = await readClaimsOnchain(
-      artifact.poolAddress,
-      wallet,
-      process.env.GY_CLAIMS_RPC_HOST?.trim() || DEFAULT_CLAIMS_RPC_HOST,
-    );
-    onchain = read.onchain;
+    // Registry facts for the state machine, defaulting to "the read failed"
+    // (registryError set → the machine answers snapshot-unavailable).
+    let registryFacts: RegistryFacts | null = null;
+    let registryAbsent = false;
+    let registryError: string | null = null;
+    let claimRecord: WalletClaimRecord | null = null;
+    let claimRecordError = false;
+    try {
+      const read = await readClaimsOnchain(
+        artifact.poolAddress,
+        wallet,
+        process.env.GY_CLAIMS_RPC_HOST?.trim() || DEFAULT_CLAIMS_RPC_HOST,
+      );
+      onchain = read.onchain;
+      registryFacts = read.registryFacts;
+      registryAbsent = read.registryAbsent;
+      registryError = read.registryError;
+      claimRecord = read.claimRecord;
+      claimRecordError = read.claimRecordError;
+    } catch (e) {
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      console.error(`[gy/claims] on-chain settlement read failed (fail-closed): ${msg.slice(0, 180)}`);
+      registryError = msg.slice(0, 180);
+    }
 
     if (wallet !== null) {
       // 3. Wallet claim view — the fail-closed state machine. A failed
@@ -82,14 +114,31 @@ export async function GET(request: Request): Promise<Response> {
       const input: WalletClaimInput = {
         wallet,
         artifact,
-        registry: read.registryFacts,
-        registryAbsent: read.registryAbsent,
-        registryError: read.registryError,
-        claimRecord: read.claimRecord,
-        claimRecordError: read.claimRecordError,
+        registry: registryFacts,
+        registryAbsent,
+        registryError,
+        claimRecord,
+        claimRecordError,
         vaultProgramId: PROGRAM_IDS.graveVault,
       };
-      walletView = walletClaimView(input);
+      try {
+        walletView = walletClaimView(input);
+      } catch (e) {
+        // Unreachable after the F1/F2 gates — kept as defense-in-depth: an
+        // exception here degrades to snapshot-unavailable, never a 500.
+        const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+        console.error(`[gy/claims] wallet claim view failed (fail-closed): ${msg.slice(0, 180)}`);
+        walletView = walletClaimView({
+          wallet,
+          artifact: null,
+          registry: null,
+          registryAbsent: false,
+          registryError: null,
+          claimRecord: null,
+          claimRecordError: false,
+          vaultProgramId: PROGRAM_IDS.graveVault,
+        });
+      }
     }
   } else if (wallet !== null) {
     // No usable artifact → eligibility unknown; the state machine says so

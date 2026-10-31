@@ -152,10 +152,48 @@ function hex32(v: unknown, what: string): string {
   return s;
 }
 
+/**
+ * SECURITY (review 2026-10-31, F2): a pubkey-shaped STRING is not a pubkey.
+ * The base58 regex alone accepts 32-44 char strings that decode to 23, 24, 31…
+ * bytes — every later `new PublicKey()` on such a value throws. The Merkle
+ * integrity gate does NOT cover pool_address/amm_program_id/lp_mint (only
+ * owner+balance leaves), so a crafted artifact could pass integrity and then
+ * blow up the route with an unhandled 500 instead of the honest corrupt
+ * envelope. Every artifact pubkey is therefore constructed and CANONICALIZED
+ * here — a value that cannot be a real key fails at the schema gate, before
+ * any consumer can crash on it.
+ */
 function pubkeyStr(v: unknown, what: string): string {
   const s = str(v, what);
   if (!PUBKEY_RE.test(s)) throw new ClaimsError(`${what} is not a base58 pubkey`);
-  return s;
+  let key: PublicKey;
+  try {
+    key = new PublicKey(s);
+  } catch {
+    throw new ClaimsError(`${what} is base58-shaped but not a valid Solana public key`);
+  }
+  return key.toBase58();
+}
+
+/**
+ * SECURITY (review 2026-10-31, F1): the ?wallet= query gate. The regex alone
+ * is not enough — a regex-passing string that is not a valid PublicKey made
+ * walletClaimView throw (unhandled 500) the moment a distribution artifact
+ * was configured, breaking the route's own "invalid wallet → wallet: null
+ * envelope" promise and its "every outcome answers 200" rule. A string that
+ * decodes to exactly 32 bytes is by construction the canonical encoding, so
+ * the returned value is always canonical base58 — safe to string-compare
+ * against artifact entry owners and safe for every downstream
+ * PublicKey/PDA construction.
+ */
+export function canonicalQueryWallet(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (!PUBKEY_RE.test(raw)) return null;
+  try {
+    return new PublicKey(raw).toBase58();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -191,6 +229,9 @@ export function parseDistributionArtifact(raw: unknown): DistributionArtifact {
     if (!isObj(e)) throw new ClaimsError(`entries[${i}] must be an object`);
     if (!Array.isArray(e.proof)) throw new ClaimsError(`entries[${i}].proof must be an array`);
     return {
+      // pubkeyStr canonicalizes: an artifact written with a non-canonical
+      // owner encoding normalizes to the same canonical base58 the tree
+      // builder derives, so entryForWallet's string compare stays exact.
       owner: pubkeyStr(e.owner, `entries[${i}].owner`),
       lpBalance: u64num(e.lp_balance, `entries[${i}].lp_balance`),
       leaf: hex32(e.leaf, `entries[${i}].leaf`),
