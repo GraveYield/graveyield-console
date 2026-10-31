@@ -290,8 +290,11 @@ export function Protocol({ snapshotHealth }: { snapshotHealth: IndexerHealthSumm
             </p>
           ) : (
             <div className="grid gap-3 lg:grid-cols-2">
-              {/* GraveScanner — live authority / pause / oracles */}
-              <div className="space-y-2 rounded-lg border border-white/8 bg-white/[0.03] p-3">
+              {/* GraveScanner — live authority / pause / oracles.
+                  min-w-0: this box is a grid item — without it the unbreakable
+                  44-char authority chip drives min-content width (~463px) and
+                  blows the box through the card and the mobile viewport. */}
+              <div className="min-w-0 space-y-2 rounded-lg border border-white/8 bg-white/[0.03] p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-[11px] uppercase tracking-wider text-slate-500">GraveScanner</span>
                   <ToneBadge tone={scannerCfg === null ? "muted" : scannerCfg.paused ? "bad" : "ok"}>
@@ -307,27 +310,27 @@ export function Protocol({ snapshotHealth }: { snapshotHealth: IndexerHealthSumm
                     oracle rows are withheld rather than guessed.
                   </p>
                 ) : (
-                  <div className="space-y-1.5 font-mono text-[11px]">
+                  <div className="min-w-0 space-y-1.5 font-mono text-[11px]">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-500">authority</span>
-                      <span className="flex items-center gap-1.5 text-slate-300">
-                        {shortAddr(scannerCfg.authority, 6, 6)} <CopyChip text={scannerCfg.authority} label="Copy scanner authority" />
+                      <span className="shrink-0 text-slate-500">authority</span>
+                      <span className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-slate-300">
+                        <span className="whitespace-nowrap">{shortAddr(scannerCfg.authority, 6, 6)}</span> <CopyChip text={scannerCfg.authority} label="Copy scanner authority" />
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-500">activity oracle</span>
+                      <span className="shrink-0 text-slate-500">activity oracle</span>
                       <span className="text-slate-300">{shortAddr(scannerCfg.activityOracle, 6, 6)}</span>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-500">launch-price oracle</span>
+                      <span className="shrink-0 text-slate-500">launch-price oracle</span>
                       <span className="text-slate-300">{shortAddr(scannerCfg.launchPriceOracle, 6, 6)}</span>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* GraveVault — live authority / pause */}
-              <div className="space-y-2 rounded-lg border border-white/8 bg-white/[0.03] p-3">
+              {/* GraveVault — live authority / pause (same min-w-0 discipline) */}
+              <div className="min-w-0 space-y-2 rounded-lg border border-white/8 bg-white/[0.03] p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-[11px] uppercase tracking-wider text-slate-500">GraveVault</span>
                   <ToneBadge tone={vaultCfg === null ? "muted" : vaultCfg.emergencyPaused ? "bad" : "ok"}>
@@ -343,16 +346,16 @@ export function Protocol({ snapshotHealth }: { snapshotHealth: IndexerHealthSumm
                     is withheld rather than guessed.
                   </p>
                 ) : (
-                  <div className="space-y-1.5 font-mono text-[11px]">
+                  <div className="min-w-0 space-y-1.5 font-mono text-[11px]">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-500">authority</span>
-                      <span className="flex items-center gap-1.5 text-slate-300">
-                        {shortAddr(vaultCfg.authority, 6, 6)} <CopyChip text={vaultCfg.authority} label="Copy vault authority" />
+                      <span className="shrink-0 text-slate-500">authority</span>
+                      <span className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-slate-300">
+                        <span className="whitespace-nowrap">{shortAddr(vaultCfg.authority, 6, 6)}</span> <CopyChip text={vaultCfg.authority} label="Copy vault authority" />
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-500">pause gates</span>
-                      <span className="text-right text-slate-400">salvage_pool only — claim_lp_proceeds stays live</span>
+                      <span className="shrink-0 text-slate-500">pause gates</span>
+                      <span className="min-w-0 text-right text-slate-400">salvage_pool only — claim_lp_proceeds stays live</span>
                     </div>
                   </div>
                 )}
@@ -555,7 +558,9 @@ export function Protocol({ snapshotHealth }: { snapshotHealth: IndexerHealthSumm
                   {liveChecks.map((c) => (
                     <div key={c.label} className="flex items-baseline justify-between gap-3 py-1.5">
                       <dt className="text-slate-500">{c.label}</dt>
-                      <dd className="flex flex-wrap items-center justify-end gap-1.5 text-right">
+                      {/* min-w-0 lets the dd shrink so the nowrap "live …" badge
+                          wraps below the spec value on ≤320px screens */}
+                      <dd className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 text-right">
                         <span className="text-slate-600">spec {c.reference}</span>
                         <ToneBadge tone={specCheckTone(c.status)}>
                           {c.status === "unavailable" ? "live —" : c.status === "match" ? `live ${c.live} ✓` : `live ${c.live} ≠ spec`}

@@ -356,7 +356,7 @@ function TopBar() {
                 <span className="text-slate-600">…</span>
               )}
             </span>
-            <div className="relative h-1.5 w-40 overflow-hidden rounded-full bg-white/8">
+            <div className="relative h-1.5 w-40 shrink-0 overflow-hidden rounded-full bg-white/8">
               <div
                 className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400"
                 style={{ width: `${pct ?? 0}%` }}
@@ -375,10 +375,23 @@ function TopBar() {
             </ToneBadge>
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-2 sm:gap-3">
+        <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
+          {/* Data-state disclosure. The full per-view breakdown is ~1030px of
+           * nowrap text — at sm..2xl it crushed the epoch telemetry (progress
+           * bar collapsed to 0) and overflowed the bar below 1280px. So: a
+           * short, still-truthful chip below 2xl (full text on hover), and
+           * the full breakdown only where it truly fits (≥1536px). Each view
+           * keeps its own full data-state labels regardless. */}
           <ToneBadge
             tone="warn"
-            className="hidden sm:inline-flex"
+            title="Mixed data — per-view labels: Graveyard real (snapshot), epoch live (RPC), fleet ingested or withheld (FLEET_STATE_DIR), claims real (sealed distribution + devnet), overview simulated"
+            className="hidden min-w-0 sm:inline-flex 2xl:hidden"
+          >
+            Mixed data — labeled per view
+          </ToneBadge>
+          <ToneBadge
+            tone="warn"
+            className="hidden min-w-0 2xl:inline-flex"
           >
             Mixed data — per-view labels: Graveyard real (snapshot), epoch live (RPC), fleet ingested or withheld (FLEET_STATE_DIR), claims real (sealed distribution + devnet), overview simulated
           </ToneBadge>
