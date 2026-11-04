@@ -37,9 +37,9 @@ describe("fmtNum", () => {
 
 describe("shortAddr", () => {
   test("head…tail with ellipsis; short strings pass through", () => {
-    const a = "CuQZesHk8eHvaoNTFiTr1hUjfVKGCqDZHTTe8HkJAo54";
-    expect(shortAddr(a)).toBe("CuQZ…Ao54");
-    expect(shortAddr(a, 6, 6)).toBe("CuQZes…kJAo54");
+    const a = "EFJpKtWx5gDnc4Hh6GEEgPLUrPh377E4Nfic8jsJAQJL";
+    expect(shortAddr(a)).toBe("EFJp…AQJL");
+    expect(shortAddr(a, 6, 6)).toBe("EFJpKt…sJAQJL");
     expect(shortAddr("short")).toBe("short");
     expect(shortAddr("0123456789", 4, 4)).toBe("0123…6789");
   });

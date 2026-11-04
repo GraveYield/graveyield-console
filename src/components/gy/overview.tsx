@@ -311,7 +311,9 @@ export function Overview({ pools, events }: { pools: Pool[]; events: BotEvent[] 
       {/* Program IDs */}
       <section className="glass-panel flex flex-wrap items-center justify-between gap-4 rounded-xl p-4 sm:p-5">
         <p className="text-sm font-semibold text-foreground">
-          Programs — devnet since {PROGRAM_IDS.deployedAt}
+          {PROGRAM_IDS.deployedAt
+            ? `Programs — devnet since ${PROGRAM_IDS.deployedAt}`
+            : "Programs — NS-3 devnet deployment pending"}
         </p>
         <div className="flex flex-col gap-1.5 font-mono text-[11px]">
           <span className="text-slate-500">
