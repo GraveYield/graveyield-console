@@ -2,6 +2,17 @@
 // byte-match the SDK layouts. The base58 encoder is cross-checked against
 // @solana/web3.js as the independent oracle; the discriminator is recomputed
 // from its derivation rather than trusted.
+//
+// NS-3 identity note (review correction): the synthetic fixtures use the
+// APPROVED NS-3 authority arrangement, not the program IDs —
+//   * ProtocolConfig authority = the dedicated GOVERNANCE authority
+//     (initial and permanent config authority for BOTH programs, DR-002);
+//     using a program ID here was the NS-1-era shape and misdescribes the
+//     arrangement the decoder will actually read.
+//   * Oracle fields = the dedicated activity (C1) and launch-price (C2)
+//     oracle signers, i.e. the post-registration state the console will
+//     display after the owner runs register-oracle.
+// Public keys only — no private key material exists in this repo.
 
 /// <reference types="bun-types" />
 import { describe, test, expect } from "bun:test";
@@ -21,11 +32,18 @@ function putPubkey(buf: Uint8Array, off: number, pk: string): void {
   buf.set(new PublicKey(pk).toBytes(), off);
 }
 
-/** Build a byte-exact scanner ProtocolConfig account payload. */
+/** NS-3 ProtocolConfig authority — the dedicated governance authority (DR-002; public key only). */
+const NS3_GOVERNANCE_AUTHORITY = "BMnrpx9mSZDzCmM8aJipnzgfLzfxa5tfFgWi3ZvBUwf5";
+/** NS-3 dedicated GraveScanner activity (C1) oracle signer — public key only. */
+const NS3_ACTIVITY_ORACLE = "2ZygwHNXUBm3ESuvzxqL8ywdqKo8pkkcS6XfXQoZqf8o";
+/** NS-3 dedicated GraveScanner launch-price (C2) oracle signer — public key only. */
+const NS3_LAUNCH_PRICE_ORACLE = "97JVKVd6E8Tmax8AciUNA4U92hwEQxN9MpeAessQBcee";
+
+/** Build a byte-exact scanner ProtocolConfig account payload (NS-3 authority arrangement). */
 function buildScannerConfig(): Uint8Array {
   const buf = new Uint8Array(252);
   buf.set(PROTOCOL_CONFIG_DISCRIMINATOR, 0);
-  putPubkey(buf, 8, "EFJpKtWx5gDnc4Hh6GEEgPLUrPh377E4Nfic8jsJAQJL"); // authority
+  putPubkey(buf, 8, NS3_GOVERNANCE_AUTHORITY); // authority — the GOVERNANCE authority, not a program ID
   putPubkey(buf, 40, "11111111111111111111111111111111"); // pending authority (zeros)
   const dv = new DataView(buf.buffer);
   dv.setBigUint64(80, 7_776_000n, true); // inactivity_seconds
@@ -35,17 +53,17 @@ function buildScannerConfig(): Uint8Array {
   dv.setBigUint64(106, 1_000n, true); // lp_burn_dust_threshold
   dv.setBigUint64(114, 3_600n, true); // cert_ttl_seconds
   buf[122] = 0; // paused
-  putPubkey(buf, 123, "So11111111111111111111111111111111111111112"); // activity oracle
-  putPubkey(buf, 155, "So11111111111111111111111111111111111111112"); // launch price oracle
+  putPubkey(buf, 123, NS3_ACTIVITY_ORACLE); // activity oracle — dedicated C1 signer
+  putPubkey(buf, 155, NS3_LAUNCH_PRICE_ORACLE); // launch price oracle — dedicated C2 signer
   buf[187] = 255; // bump
   return buf;
 }
 
-/** Build a byte-exact vault ProtocolConfig account payload. */
+/** Build a byte-exact vault ProtocolConfig account payload (NS-3 authority arrangement). */
 function buildVaultConfig(): Uint8Array {
   const buf = new Uint8Array(210);
   buf.set(PROTOCOL_CONFIG_DISCRIMINATOR, 0);
-  putPubkey(buf, 8, "7VxUGJNgi1bZ8x4rTtLBNdgLs9sCLmUTpVE3on1nshya"); // authority
+  putPubkey(buf, 8, NS3_GOVERNANCE_AUTHORITY); // authority — the GOVERNANCE authority, not a program ID
   const dv = new DataView(buf.buffer);
   dv.setUint16(80, 4_000, true); // lp_holder_share_bps
   dv.setUint16(82, 4_000, true); // salvor_share_bps
@@ -69,7 +87,7 @@ describe("protocolLive — discriminator", () => {
 describe("protocolLive — scanner config decoder", () => {
   test("decodes a byte-exact payload with full precision", () => {
     const cfg: ScannerConfigLive = decodeScannerConfigLive(buildScannerConfig());
-    expect(cfg.authority).toBe("EFJpKtWx5gDnc4Hh6GEEgPLUrPh377E4Nfic8jsJAQJL");
+    expect(cfg.authority).toBe(NS3_GOVERNANCE_AUTHORITY);
     expect(cfg.pendingAuthority).toBe("11111111111111111111111111111111");
     expect(cfg.inactivitySeconds).toBe("7776000");
     expect(cfg.priceCollapseBps).toBe(9_900);
@@ -78,8 +96,8 @@ describe("protocolLive — scanner config decoder", () => {
     expect(cfg.lpBurnDustThreshold).toBe("1000");
     expect(cfg.certTtlSeconds).toBe("3600");
     expect(cfg.paused).toBe(false);
-    expect(cfg.activityOracle).toBe("So11111111111111111111111111111111111111112");
-    expect(cfg.launchPriceOracle).toBe("So11111111111111111111111111111111111111112");
+    expect(cfg.activityOracle).toBe(NS3_ACTIVITY_ORACLE);
+    expect(cfg.launchPriceOracle).toBe(NS3_LAUNCH_PRICE_ORACLE);
     expect(cfg.bump).toBe(255);
   });
 
@@ -99,7 +117,7 @@ describe("protocolLive — scanner config decoder", () => {
 describe("protocolLive — vault config decoder", () => {
   test("decodes a byte-exact payload with full precision", () => {
     const cfg: VaultConfigLive = decodeVaultConfigLive(buildVaultConfig());
-    expect(cfg.authority).toBe("7VxUGJNgi1bZ8x4rTtLBNdgLs9sCLmUTpVE3on1nshya");
+    expect(cfg.authority).toBe(NS3_GOVERNANCE_AUTHORITY);
     expect(cfg.lpHolderShareBps).toBe(4_000);
     expect(cfg.salvorShareBps).toBe(4_000);
     expect(cfg.protocolShareBps).toBe(2_000);
