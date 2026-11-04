@@ -28,8 +28,8 @@ import {
 import { claimsBytesToPayload } from "../claimsSource";
 import type { ClaimsSourceKind } from "../claimsTransport";
 
-const VALID_PROGRAM_ID = "CuQZesHk8eHvaoNTFiTr1hUjfVKGCqDZHTTe8HkJAo54"; // GraveScanner
-const VALID_VAULT_ID = "Bd5smhQgMrvcRw9j659MNTKySpBJsKZLBKtinCAGs7rg"; // GraveVault
+const VALID_PROGRAM_ID = "EFJpKtWx5gDnc4Hh6GEEgPLUrPh377E4Nfic8jsJAQJL"; // GraveScanner (NS-3)
+const VALID_VAULT_ID = "7VxUGJNgi1bZ8x4rTtLBNdgLs9sCLmUTpVE3on1nshya"; // GraveVault (NS-3)
 const SYSTEM_PROGRAM = "11111111111111111111111111111111"; // 32 zero bytes — valid, canonical
 /** 32 × '2' passes /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ but decodes to 23 bytes. */
 const SHAPE_NOT_A_KEY = "2".repeat(32);

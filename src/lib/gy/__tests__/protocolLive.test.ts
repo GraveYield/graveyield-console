@@ -25,7 +25,7 @@ function putPubkey(buf: Uint8Array, off: number, pk: string): void {
 function buildScannerConfig(): Uint8Array {
   const buf = new Uint8Array(252);
   buf.set(PROTOCOL_CONFIG_DISCRIMINATOR, 0);
-  putPubkey(buf, 8, "CuQZesHk8eHvaoNTFiTr1hUjfVKGCqDZHTTe8HkJAo54"); // authority
+  putPubkey(buf, 8, "EFJpKtWx5gDnc4Hh6GEEgPLUrPh377E4Nfic8jsJAQJL"); // authority
   putPubkey(buf, 40, "11111111111111111111111111111111"); // pending authority (zeros)
   const dv = new DataView(buf.buffer);
   dv.setBigUint64(80, 7_776_000n, true); // inactivity_seconds
@@ -45,7 +45,7 @@ function buildScannerConfig(): Uint8Array {
 function buildVaultConfig(): Uint8Array {
   const buf = new Uint8Array(210);
   buf.set(PROTOCOL_CONFIG_DISCRIMINATOR, 0);
-  putPubkey(buf, 8, "Bd5smhQgMrvcRw9j659MNTKySpBJsKZLBKtinCAGs7rg"); // authority
+  putPubkey(buf, 8, "7VxUGJNgi1bZ8x4rTtLBNdgLs9sCLmUTpVE3on1nshya"); // authority
   const dv = new DataView(buf.buffer);
   dv.setUint16(80, 4_000, true); // lp_holder_share_bps
   dv.setUint16(82, 4_000, true); // salvor_share_bps
@@ -69,7 +69,7 @@ describe("protocolLive — discriminator", () => {
 describe("protocolLive — scanner config decoder", () => {
   test("decodes a byte-exact payload with full precision", () => {
     const cfg: ScannerConfigLive = decodeScannerConfigLive(buildScannerConfig());
-    expect(cfg.authority).toBe("CuQZesHk8eHvaoNTFiTr1hUjfVKGCqDZHTTe8HkJAo54");
+    expect(cfg.authority).toBe("EFJpKtWx5gDnc4Hh6GEEgPLUrPh377E4Nfic8jsJAQJL");
     expect(cfg.pendingAuthority).toBe("11111111111111111111111111111111");
     expect(cfg.inactivitySeconds).toBe("7776000");
     expect(cfg.priceCollapseBps).toBe(9_900);
@@ -99,7 +99,7 @@ describe("protocolLive — scanner config decoder", () => {
 describe("protocolLive — vault config decoder", () => {
   test("decodes a byte-exact payload with full precision", () => {
     const cfg: VaultConfigLive = decodeVaultConfigLive(buildVaultConfig());
-    expect(cfg.authority).toBe("Bd5smhQgMrvcRw9j659MNTKySpBJsKZLBKtinCAGs7rg");
+    expect(cfg.authority).toBe("7VxUGJNgi1bZ8x4rTtLBNdgLs9sCLmUTpVE3on1nshya");
     expect(cfg.lpHolderShareBps).toBe(4_000);
     expect(cfg.salvorShareBps).toBe(4_000);
     expect(cfg.protocolShareBps).toBe(2_000);
@@ -126,7 +126,7 @@ describe("protocolLive — base58 reader", () => {
       new Uint8Array(32), // 32 leading zeros
       new Uint8Array(32).fill(1),
       new Uint8Array(32).fill(0xff),
-      new PublicKey("CuQZesHk8eHvaoNTFiTr1hUjfVKGCqDZHTTe8HkJAo54").toBytes(),
+      new PublicKey("EFJpKtWx5gDnc4Hh6GEEgPLUrPh377E4Nfic8jsJAQJL").toBytes(),
       new PublicKey("So11111111111111111111111111111111111111112").toBytes(),
     ];
     for (const bytes of vectors) {

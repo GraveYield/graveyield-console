@@ -18,25 +18,43 @@ import type { BotEvent, Invariant, Pool } from "./types";
 
 export const CLUSTER = "devnet" as const;
 
-// Program IDs — NS-2 / DR-001 fresh devnet deployment (2026-10-25).
-// Sources: graveyield-protocol docs/DEVNET.md, sdk/src/client.ts constants,
-// and live-cluster verification (getAccountInfo on api.devnet.solana.com:
-// both programs executable, both config PDAs owned by their programs,
-// both bumps 255). The pre-refresh IDs (5JiCVx… / HUyoG5…) are the FROZEN
-// DR-001 static reference — authority key dead, historical only; they must
-// never reappear here (pinned by src/lib/gy/__tests__/programIds.test.ts).
+// NS-3 — the ASSIGNED devnet deployment (DR-002, 2026-11-04; owner-generated,
+// owner-held program keypairs). Deployment and on-chain acceptance are
+// PENDING: until the owner executes the deployment recorded in
+// graveyield-protocol docs/DEVNET.md, nothing on devnet answers at these
+// addresses and the live pulse reads an explicit unavailable state.
+// Config PDAs are the pre-deployment derivations of ['protocol_config']
+// under the assigned program IDs (bump 255).
+// Sources: graveyield-protocol docs/DEVNET.md (NS-3 preparation record),
+// sdk/src/client.ts constants. The NS-2 (2026-10-25) and NS-1 (2026-10-09)
+// deployments are retired — RETIRED_PROGRAM_IDS below; historical records in
+// graveyield-protocol docs/LEGACY_DEPLOYMENTS.md (pinned by
+// src/lib/gy/__tests__/programIds.test.ts).
 export const PROGRAM_IDS = {
-  graveScanner: "CuQZesHk8eHvaoNTFiTr1hUjfVKGCqDZHTTe8HkJAo54",
-  graveVault: "Bd5smhQgMrvcRw9j659MNTKySpBJsKZLBKtinCAGs7rg",
-  scannerConfigPda: "Fb6uvYyRAKFRCuab44imZ6YAVAEfGLoAPDxFpwVXQdiD",
-  vaultConfigPda: "hyKk983fguE2CGA5Dx5TLKfBft1AJrm7CHoe1PTUipS",
-  deployedAt: "2026-10-25",
+  graveScanner: "EFJpKtWx5gDnc4Hh6GEEgPLUrPh377E4Nfic8jsJAQJL",
+  graveVault: "7VxUGJNgi1bZ8x4rTtLBNdgLs9sCLmUTpVE3on1nshya",
+  scannerConfigPda: "5PK9pz4FcmiWGG3h81WquD2QpwuEj2GeAXxLGGMJkKKe",
+  vaultConfigPda: "5aocH2UAFixQneb5LzoNf2m3b92AUc9zFP6oWEh6Vnda",
+  /** Deployment date — null until the owner's NS-3 deployment is recorded in docs/DEVNET.md. */
+  deployedAt: null as string | null,
 } as const;
 
-/** The frozen DR-001 static-reference deployment — must stay obsolete. */
+/** Retired devnet deployments — must stay obsolete (per-generation record). */
 export const RETIRED_PROGRAM_IDS = {
-  graveScanner: "5JiCVxES6RYcrFGnFkqKyDmr7fc3EkYaSCbfgJq7zvNF",
-  graveVault: "HUyoG5vUmYZJDjdBCxRLLAfm98vEXh63WL3pLARox3v6",
+  /** NS-2 — DR-001 refresh (2026-10-25); shared authority key permanently lost (DR-002). */
+  ns2: {
+    graveScanner: "CuQZesHk8eHvaoNTFiTr1hUjfVKGCqDZHTTe8HkJAo54",
+    graveVault: "Bd5smhQgMrvcRw9j659MNTKySpBJsKZLBKtinCAGs7rg",
+    scannerConfigPda: "Fb6uvYyRAKFRCuab44imZ6YAVAEfGLoAPDxFpwVXQdiD",
+    vaultConfigPda: "hyKk983fguE2CGA5Dx5TLKfBft1AJrm7CHoe1PTUipS",
+  },
+  /** NS-1 — frozen DR-001 static reference (2026-10-09); authority key dead (DR-001). */
+  ns1: {
+    graveScanner: "5JiCVxES6RYcrFGnFkqKyDmr7fc3EkYaSCbfgJq7zvNF",
+    graveVault: "HUyoG5vUmYZJDjdBCxRLLAfm98vEXh63WL3pLARox3v6",
+    scannerConfigPda: "GcdZJhCpg7sjgEEHTsoSkT2Pi83d8kP3NrTqdvMm2Bhu",
+    vaultConfigPda: "2SCqqpEwKMuWnJWe7UQJTzFeDPif4jUPUspWKZdZ5vaU",
+  },
 } as const;
 
 /** ProtocolConfig defaults (spec §4 + D-sets). */
