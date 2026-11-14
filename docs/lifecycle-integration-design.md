@@ -96,14 +96,31 @@ being written down:
    preflight fact; it never folds it into the lifecycle state and never evaluates the criteria
    themselves.
 4. **Cluster-time freshness and expiry-boundary uncertainty.** §7.5 now defines the estimate's
-   maximum age (a bounded `getBlockTime` look-back window, validated source slot and
-   timestamp), and an explicit expiry-boundary margin: when the estimate lies within ±60 s of
+   source-slot recency bound (a bounded `getBlockTime` look-back window, validated source slot
+   and timestamp) — explicitly a slot-distance bound, not a wall-clock freshness guarantee —
+   and an explicit expiry-boundary margin: when the estimate lies within ±60 s of
    the cert's `expiresAt`, the expiry decision is inside the estimate's uncertainty and the
    classification fails closed to `"unavailable"` rather than asserting `certified` or
    `certificate-expired` from an approximate timestamp. No precision is claimed beyond what
    Solana RPC provides, and the estimate is never presented as definitive on-chain validity.
 
 The document remains design-only — no code is changed by this document.
+
+**Revision (2026-11-15, final cluster-time freshness correction — delivered in PR #12).** One
+further correction to §7.5, verified against the canonical sources (`graveyield-protocol` `main`
+@ `16f76add`) and the console implementation before being written down. The
+`CLUSTER_TIME_MAX_LOOKBACK_SLOTS` look-back is now stated as a slot-distance bound, explicitly
+distinguished from a wall-clock freshness guarantee (slot pacing is variable and has changed
+across the cluster's history, so 50 slots have no fixed duration in seconds); the round-3 claim
+that the 60-second expiry margin is "comfortably larger than the nominal look-back bound plus
+execution skew" is withdrawn — the margin is a design-stage guard band, not a proven uncertainty
+bound, and the route's implementation does not yet exist to substantiate one; fail-closed
+behavior is now defined for every case in which the estimate's freshness or uncertainty cannot
+be established; and the preserved rules are re-affirmed: local server time is bookkeeping only
+and never an expiry input, the `getBlockTime` estimate is never presented as definitive proof of
+the vault's `Clock::get().unix_timestamp` expiry decision, and uncertain expiry boundaries keep
+the existing `"unavailable"` classification. The document remains design-only — no code is
+changed by this document.
 
 **Non-goals (hard boundaries).** This design does not change protocol behavior, does not make the
 console an eligibility authority, does not evaluate criteria, does not sign anything, and does not
@@ -798,31 +815,51 @@ Per-pool request-versioning, the pattern `tx/reconcile.ts` and the snapshot tran
   fetches a cluster-time estimate over RPC at the route's `confirmed` commitment:
   1. `head = getSlot()` — the newest slot at that commitment.
   2. Walk back from `head` toward older slots, at most `CLUSTER_TIME_MAX_LOOKBACK_SLOTS = 50`
-     slots (≈20 s at the nominal ~2.5 slots/s — nominal pacing, not a guarantee; devnet slot
-     pacing degrades under load), calling `getBlockTime(slot)` until it returns a value.
+     slots, calling `getBlockTime(slot)` until it returns a value. The limit bounds SLOT
+     DISTANCE only — how far the source block may trail the observed head. It is NOT a
+     wall-clock freshness bound: 50 slots have no fixed duration in seconds, because slot
+     production time is variable (pacing degrades under load and degraded cluster conditions)
+     and has changed across the cluster's history (mainnet-beta's staged reduction of nominal
+     slot time from 400 ms to 200 ms completed in October 2026). The design draws no
+     "approximately N seconds" conclusion from the slot count, in either direction.
   3. Accept the first result ONLY if it is a finite non-negative integer (unix seconds); a `null`
-     still unanswered beyond the window, a non-integer, or an RPC error yields no estimate.
+     still unanswered beyond the window, a non-integer, or an RPC error yields no estimate. The
+     accepted result must carry the slot it came from: a timestamp whose source slot cannot be
+     tied to the observed head within the walked distance never becomes an available
+     `TimeRead` (its recency cannot be established even in slot terms; see "Fail closed").
   4. Record the accepted triple — `value` (unix seconds), `sourceSlot` (the slot whose block time
      supplied it), and `estimatedAtUnixMs` (local fetch stamp, bookkeeping only) — as the
      `TimeRead` of §5.1.
-  **This is explicitly an estimate, not the runtime's exact `Clock` value**: the design makes no
-  claim that the console can reproduce the `Clock::get().unix_timestamp` a future transaction
-  will observe. Block time carries the slot-timestamp uncertainty (second granularity,
+  **This is explicitly an estimate, not the runtime's exact `Clock` value**: the RPC
+  specification defines `getBlockTime` as the ESTIMATED production time of a block (computed
+  from validator-reported timestamps), not an exact ledger record, and the design makes no claim
+  that the console can reproduce the `Clock::get().unix_timestamp` a future transaction will
+  observe. Block time carries the slot-timestamp uncertainty (second granularity,
   validator-clock skew), which is why the classification consumes it as `TimeRead` evidence
   (§5.1), never as certainty.
-- **Maximum age of the estimate.** The estimate is fetched per lifecycle refresh — the same
-  refresh that reads the accounts — and consumed only within that same route execution: no
-  cross-refresh reuse, no caching, no background polling (a cached estimate from a previous
-  refresh is never used to classify a new read). Its uncorrected staleness is bounded by
-  construction: the source slot is at most `CLUSTER_TIME_MAX_LOOKBACK_SLOTS` behind the head
-  slot observed at fetch time, plus the route's own execution time. There is deliberately no
-  wall-clock "age in seconds" calculation substituting for cluster time — the local clock stamps
-  bookkeeping fields only (`estimatedAtUnixMs`, `checkedAtUnixMs`) and is never an expiry input.
+- **Source-slot recency, not a wall-clock age.** The estimate is fetched per lifecycle refresh —
+  the same refresh that reads the accounts — and consumed only within that same route execution:
+  no cross-refresh reuse, no caching, no background polling (a cached estimate from a previous
+  refresh is never used to classify a new read). Its freshness is established only in slot
+  terms: the accepted `sourceSlot` is at most `CLUSTER_TIME_MAX_LOOKBACK_SLOTS` behind the head
+  slot observed at fetch time, and that slot-distance relationship is what the `TimeRead`
+  records (§5.1). The design deliberately derives no wall-clock age bound from it — a fixed
+  slot distance cannot be converted into a bounded "seconds old" figure (slot pacing is
+  variable), and the route's own execution time adds further, unbounded delay between the
+  source slot and consumption. There is deliberately no wall-clock "age in seconds" calculation
+  substituting for cluster time — the local clock stamps bookkeeping fields only
+  (`estimatedAtUnixMs`, `checkedAtUnixMs`) and is never an expiry input.
 - **Expiry-boundary uncertainty.** Because the estimate is approximate, the classification
   treats it as decisive only OUTSIDE an explicit boundary margin:
-  `EXPIRY_BOUNDARY_MARGIN_SECONDS = 60` — comfortably larger than the nominal ~20 s look-back
-  bound plus execution skew, and small against the 600 s `MIN_CERT_TTL_SECONDS` floor, so it
-  affects only a thin band around `expiresAt`. When
+  `EXPIRY_BOUNDARY_MARGIN_SECONDS = 60` — a fixed guard band, small against the 600 s
+  `MIN_CERT_TTL_SECONDS` floor so it affects only a thin band around `expiresAt`. The margin is
+  a design-stage heuristic, NOT a proven uncertainty bound: the design does not claim it covers
+  the estimate's timing uncertainty, because no fixed second value can bound that uncertainty
+  (slot pacing is variable, so the source block's wall-clock distance behind the head is
+  unbounded in the degraded case) and the route's implementation does not yet exist to measure
+  any residual error. Its role is narrower: inside the band an approximate timestamp is never
+  treated as decisive, and the vault's own `is_expired` gate remains the authority at salvage
+  time regardless of the band (§5.6). When
   `|nowUnix.value − cert.expiresAt| ≤ EXPIRY_BOUNDARY_MARGIN_SECONDS`, the certified-vs-expired
   decision lies inside the estimate's uncertainty: the classification fails closed to
   `"unavailable"` + diagnostics (§5.3 rule 6) instead of asserting a state the vault's own
@@ -830,17 +867,23 @@ Per-pool request-versioning, the pattern `tx/reconcile.ts` and the snapshot tran
   and the rendering still labels expiry as "judged against an RPC cluster-time estimate" — never
   as definitive on-chain validity.
 - **Fail closed.** If the cluster-time estimate cannot be obtained (RPC failure, persistent
-  `null` beyond the look-back window, unusable payload) or its freshness cannot be established,
-  `TimeRead` is `unavailable` and the cert-present classification fails closed to
-  `"unavailable"` + diagnostics (§5.3 rule 6) — the sheet never guesses `certified` or
-  `certificate-expired` without a usable clock.
-- **Honest limitations.** `getBlockTime` returns the timestamp the cluster recorded for a PAST
-  block; it is not the live clock, and it drifts from a future transaction's `Clock` by at least
-  the production interval between the source slot and that transaction. Solana RPC provides no
-  stronger primitive the console could use instead, and the design claims none: no sub-second
-  precision, no clock-sync guarantee, and no assumption that devnet block times are promptly
-  available for very recent slots (the look-back window exists precisely because they often are
-  not).
+  `null` beyond the look-back window, unusable payload), or its freshness or uncertainty cannot
+  be established, `TimeRead` is `unavailable` and the cert-present classification fails closed
+  to `"unavailable"` + diagnostics (§5.3 rule 6). "Freshness cannot be established" is a
+  concrete failure mode, not a turn of phrase: the accepted timestamp must be tied to a source
+  slot within the walked distance of the head slot observed at the same refresh — §5.1 records
+  that relationship in `sourceSlot`, and a result that cannot carry it (a value of unknown
+  provenance, a missing or unverifiable slot identity, a head that cannot be established) never
+  enters the model as an available `TimeRead`, even though a number was received. The sheet
+  never guesses `certified` or `certificate-expired` without a usable clock.
+- **Honest limitations.** `getBlockTime` returns the estimated production time the cluster
+  recorded for a PAST block (per the RPC specification, computed from validator-reported
+  timestamps); it is not the live clock, and it drifts from a future transaction's `Clock` by at
+  least the production interval between the source slot and that transaction. Solana RPC
+  provides no stronger primitive the console could use instead, and the design claims none: no
+  sub-second precision, no clock-sync guarantee, no wall-clock bound on the estimate's age, and
+  no assumption that devnet block times are promptly available for very recent slots (the
+  look-back window exists precisely because they often are not).
 
 ## 8. Honest availability vs confirmed state
 
