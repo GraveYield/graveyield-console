@@ -4,13 +4,38 @@
 
 | | |
 | --- | --- |
-| **Repository** | `graveyield-console` (local audit clone; no remote operations performed) |
+| **Repository** | `graveyield-console` (Phase-2 code work performed in a local audit clone; that code work involved no remote operations) |
 | **Audited baseline** | `main` @ `9e000a9ccdfecb0b5c455c8c0675718cdb3e317e` |
 | **Baseline status at start of Phase 2** | Unchanged since the audit — HEAD identical, working tree clean |
 | **Phase** | 2 — Audit-driven corrections (per the audit report `GraveYield-Console-Audit-Report.md`, verdict PARTIALLY ALIGNED) |
 | **Work performed** | A1–A6 (Phase A), B1–B2 (Phase B), Section-4 lifecycle technical design (design only) |
-| **Verification** | 322/322 tests pass (277 baseline + 45 new), typecheck, ESLint, production build, dependency audit, SDK integrity pins — all green |
-| **Delivery** | Code: **uncommitted working-tree edits** in the local audit clone (listed in §B) — no code commits, branches, or deployments. Docs: this report and `docs/lifecycle-integration-design.md` delivered to the repository as **docs-only PR #11**, per owner instruction of 2026-11-14. |
+| **Verification** | 322/322 tests pass (277 baseline + 45 new), typecheck, ESLint, production build, dependency audit, SDK integrity pins — all green **as run in the local audit clone against the local implementation**; not re-run against PR #12, which is documentation-only |
+| **Delivery** | Code: **uncommitted working-tree edits** in the local audit clone (listed in §B) — no code commits, branches, or deployments; **not part of PR #12**. Docs: this report and `docs/lifecycle-integration-design.md` delivered in **docs-only PR #12** (branch `docs/phase2-implementation-report` → `main`; these two files only), per owner instruction of 2026-11-14. |
+
+---
+
+## Scope of this PR (documentation-only — read before §B–§F)
+
+**PR #12 changes exactly two files:** this report (`GraveYield-Console-Implementation-Report.md`)
+and `docs/lifecycle-integration-design.md`. To keep the record accurate:
+
+- **The code corrections documented in §B–§F are NOT part of PR #12.** A1–A6 and B1–B2 were
+  implemented and verified as **uncommitted working-tree edits in the local audit clone** (the
+  modified files are listed in §B.9). PR #12 delivers documentation only — no application source,
+  tests, CI workflows, SDK or protocol files, and no companion-repository changes.
+- **The 322/322 result is a reported local result.** Every gate in §E was run in that local clone
+  against the local implementation at the time it was produced. **No test was run against the
+  contents of PR #12** — the PR changes documentation only, and the test suite does not cover
+  documentation.
+- **No claims beyond documentation.** PR #12 does not claim that the console code implements the
+  lifecycle design, does not claim full protocol alignment, does not claim a completed security
+  audit, and does not claim Mainnet readiness (§H states the same boundaries).
+- **Corrections carried by this PR (owner review round):** explicit account-read states
+  (`AccountRead` / `EpochRead` / `TimeRead` — no nullable reads), deterministic classification
+  precedence with a normative truth table, `waiting-epochs` removed as a lifecycle state (epoch
+  progress is a dedicated `EpochProgress` object), `certification-ready` renamed to
+  `re-evaluation-window-reached`, explicit `owner-mismatch` handling (never treated as absent),
+  and PR-number corrections (the delivery PR is #12).
 
 ---
 
@@ -182,29 +207,30 @@ Also **not** done (Section 6/7 restrictions): no fixture-to-live substitution, n
 ## D. Lifecycle technical design (design only — NOT implemented)
 
 Per Section 4 of the authorization, the complete design is delivered as
-**`docs/lifecycle-integration-design.md`** (included in the docs-only delivery PR #11; the code
+**`docs/lifecycle-integration-design.md`** (included in the docs-only delivery PR #12; the code
 changes themselves remain uncommitted working-tree edits — see the Delivery note in the header).
 It addresses all fifteen required points and explicitly covers the additional
-states. Summary of the design's decisions (full detail, derivation table, failure matrix, and
-test plan in the document):
+states. Summary of the design's decisions (full detail — the explicit account-read model, the
+deterministic derivation order, the classification truth table, the failure matrix, and the test
+plan — in the document):
 
 1. **Accounts read (per pool):** GraveScanner `EligibilityAnchor` + `EligibilityCert`; GraveVault `PoolRegistry` + `SalvageReceipt`; plus one shared live `getEpochInfo` (already shipped by `protocolLive.fetchEpochTelemetry`). Each account owns exactly one lifecycle fact; no fact is ever derived from absence of a successful read.
 2. **Canonical SDK only:** PDA derivation via `eligibilityAnchorPda` / `eligibilityCertPda` / `poolRegistryPda` / `salvageReceiptPda` and decoding via the discriminator-asserting `decodeEligibilityAnchor` / `decodeEligibilityCert` / `decodePoolRegistry` / `decodeSalvageReceipt` from the vendored, sha256-pinned canonical SDK. The console hand-builds no seeds and transcribes no layouts.
 3. **Fact ownership:** anchor owns Phase-1 (firstEligibleEpoch, invalidated, bitmap); cert owns expiry (expiresAt) and invalidation is anchor-owned; registry existence owns "salvaged" (init-once at salvage); receipt is optional settlement detail; the live epoch owns the gap math.
 4. **Read strategy:** per selected pool on sheet open + manual refresh — no table-wide fan-out (rationale: RPC load, the no-polling discipline, the two precedents in the codebase, and blast-radius containment). Table rows remain snapshot-backed `"discovered"`; only the sheet's lifecycle panel consumes chain truth. A batched table-wide option is described for a future owner decision and kept out of scope.
 5. **Commitment:** `confirmed` (matches the claims precedent); route-executed server-side (`/api/gy/lifecycle`, Node runtime) so the SDK's `node:crypto` never enters the browser; the client re-validates the payload (preservation requirement); query parameters strictly validated.
-6. **Missing accounts:** a clean `null` lookup is a legitimate fact (accounts are init-once) mapped per the derivation order; anything that is not a clean null is an error, never "absent".
-7. **RPC failures / partial reads:** per-fact availability — readable facts render with explicit availability, unreadable facts render `unavailable` with a redacted reason; states requiring an unreadable fact degrade to `unavailable` rather than being fabricated from a half-read.
-8. **Malformed / misowned accounts:** discriminator mismatch, truncation, or wrong `owner` program → unavailable with a visible diagnostic (wrong owner additionally flagged as identity misconfiguration); no partial decode; last good state never mutated by a malformed read.
+6. **Explicit read statuses (no nullable reads):** every account read is an `AccountRead` union — `present` / `absent` / `unavailable` / `corrupt` / `owner-mismatch` — applied to anchor, cert, registry and receipt alike; only a clean `null` lookup maps to `absent` (accounts are init-once), and the epoch and clock reads carry explicit statuses too (`EpochRead` / `TimeRead`). Anything that is not a clean null is never "absent".
+7. **RPC failures / partial reads:** per-fact status — readable facts render with their explicit status, invalid reads render `unavailable` / `corrupt` / `owner-mismatch` with a redacted reason; states requiring an invalid read degrade to `unavailable` rather than being fabricated from a half-read, a corrupt read, or a wrong-owner read.
+8. **Malformed / misowned accounts:** owner validation runs BEFORE decoding. Wrong `owner` program → the explicit `owner-mismatch` status (expected vs actual owner carried verbatim) — **never treated as absent**, never decoded, classified fail-closed like any invalid read, and surfaced as an identity-misconfiguration diagnostic; discriminator mismatch or truncation → `corrupt`; no partial decode; last good state never mutated by an invalid read.
 9. **Stale-read protection:** per-pool-key monotonic sequence numbers; a response applies only if its pool key matches the current selection and its seq is the newest — rapid open/close cannot let a slow response for a previously-opened pool overwrite the current view (same discipline as the tx reconciler).
-10. **Certificate expiry:** from the cert's own on-chain `expiresAt` (i64 unix seconds) vs the caller's clock passed as an explicit argument; the TTL countdown re-derives client-side from that value without re-fetching.
+10. **Certificate expiry:** from the cert's own on-chain `expiresAt` (i64 unix seconds) vs a successfully read current time passed as an explicit clock read; if the clock read is unavailable, the expiry classification degrades to `unavailable` — expiry is never guessed. The TTL countdown re-derives client-side from that value without re-fetching.
 11. **Invalidation:** only `anchor.invalidated` (multisig-only `invalidate_anchor` on-chain) — the console can never manufacture it; it takes precedence in display even if a later cert exists.
-12. **Salvaged:** `PoolRegistry` presence (init-once at `salvage_pool`) is the terminal fact; receipt detail displayed alongside, its absence after the registry exists rendered as a partial row, never an error.
-13. **Unavailable vs confirmed:** `unavailable` is a first-class, reason-carrying state kept OUT of the `PoolState` filter vocabulary; a successful read with no anchor and no registry is `discovered`; the console never collapses "could not read" into "not anchored".
-14. **Model representation:** `PoolState` extends additively with `"anchored"`, `"certificate-expired"`, `"invalidated"` (finding 5.8); `POOL_STATE_META` gains the three labels; the stepper maps them (invalidated → the failed path's red bar). The derivation is a pure `LifecycleState` union produced by a pure, total function from a `LifecycleReads` input.
+12. **Salvaged:** a valid, correctly owned, decoded `PoolRegistry` (init-once at `salvage_pool`) is the terminal fact and outranks everything else; receipt detail displayed alongside — its absence or an unavailable receipt read after the registry exists renders as partial/unknown detail, never an error hiding the settlement. An unavailable, corrupt, or owner-mismatched registry read proves neither settlement nor non-settlement and is never treated as absent.
+13. **Unavailable vs confirmed:** `unavailable` is a first-class, reason-carrying outcome kept OUT of the `PoolState` filter vocabulary; `discovered` requires the registry, anchor and cert reads to be each **definitively** `absent`; the console never collapses "could not read" into "not anchored", an invalid read (corrupt / owner-mismatch) into absence, or an unavailable epoch/clock into a numeric value.
+14. **Model representation:** `PoolState` extends additively with `"anchored"`, `"re-evaluation-window-reached"`, `"certificate-expired"`, `"invalidated"` (finding 5.8); `POOL_STATE_META` gains the four labels; the stepper maps them (invalidated → the failed path's red bar). The derivation is a pure `LifecycleState` union produced by a pure, total function from an explicit `LifecycleReads` input (`AccountRead`/`EpochRead`/`TimeRead` — no nullable reads).
 15. **Consumers:** one `LifecycleState` + raw decoded facts feed the sheet panel, badge and stepper from a single object so display cannot drift from derivation; the existing six-state filter tabs keep their current semantics (table rows stay snapshot-backed; lifecycle filters become meaningful only with the deferred table-wide option — never silently redefined).
 
-**Boundary preservation:** GraveScanner remains the eligibility authority — `waiting-epochs` / `certification-ready` report the scanner's own Phase-1 record against the epoch clock and assert nothing about eligibility; GraveVault remains the settlement authority; the console evaluates nothing, signs nothing, infers nothing from the indexer snapshot, and the design's anti-inference pin (test 7) enforces that feeding it no on-chain reads yields `unavailable`, never a lifecycle state.
+**Boundary preservation:** GraveScanner remains the eligibility authority — `anchored` (with its separate `EpochProgress` object) and `re-evaluation-window-reached` report the scanner's own Phase-1 record against the epoch clock and assert nothing about eligibility: the window means only that GraveScanner may perform the next evaluation, not that the pool passed all six criteria, is eligible, has a certificate, is certified, or is authorized for salvage; GraveVault remains the settlement authority; the console evaluates nothing, signs nothing, infers nothing from the indexer snapshot, and the design's anti-inference pin (test 7) enforces that feeding it no successful on-chain reads yields `unavailable`, never a lifecycle state.
 
 **Deliberately out of scope:** LaunchPrice reads (C2 stays pending), any write path, any criteria evaluation, indexer schema work (O3), and any behavior before the owner records the NS-3 deployment (O2) — until then every read honestly degrades to `unavailable` at the config-not-found layer.
 
@@ -214,7 +240,7 @@ test plan in the document):
 
 ## E. Test and build results (exact commands, actual results)
 
-All commands run from the repository root after the final edit.
+All commands run from the repository root of the **local audit clone** after the final edit — i.e. against the local implementation described in §B, **not** against the contents of PR #12 (documentation-only; the suite does not cover documentation).
 
 | # | Command (verbatim) | Result |
 | --- | --- | --- |
@@ -263,8 +289,8 @@ Each item from the Phase-2 preservation list, with the evidence that it remains 
 
 **Improved but not yet fully aligned — and not yet ready for a re-audit against an ALIGNED target.**
 
-- **What moved (verified):** the one real display defect (5.1) is fixed with artifact-backed regression proof; the estimator can no longer be misled by display strings (5.11) nor treat missing activity evidence as inactivity (5.10, with live-config thresholds); the vault instruction reference is complete and CI-pinned (5.9); snapshot pools no longer render fabricated scores (5.13); the footer describes the actual mixed-data architecture (5.7); RPC reads share one documented, credential-redacting configuration surface (5.4); and the cluster badge now reflects a verified genesis hash instead of an assertion (5.5). Every correction carries focused behavioral regression tests; the full gate reproduces green (322/322, typecheck, lint, build, 0 audit findings, SDK pins intact).
+- **What moved (verified):** the one real display defect (5.1) is fixed with artifact-backed regression proof; the estimator can no longer be misled by display strings (5.11) nor treat missing activity evidence as inactivity (5.10, with live-config thresholds); the vault instruction reference is complete and CI-pinned (5.9); snapshot pools no longer render fabricated scores (5.13); the footer describes the actual mixed-data architecture (5.7); RPC reads share one documented, credential-redacting configuration surface (5.4); and the cluster badge now reflects a verified genesis hash instead of an assertion (5.5). Every correction carries focused behavioral regression tests; the full gate reproduced green locally (322/322, typecheck, lint, build, 0 audit findings, SDK pins intact).
 - **What still stands between the console and full alignment:** the lifecycle (5.2/5.8) — designed (§D), not implemented, pending O4; the indexer evidence-status vocabulary (5.6/O3), cross-repo and owner-gated; the NS-3 deployment-status reconciliation (5.12/O2); the O7 dust-reference correction (verified, awaiting approval); and the O1/O5 documentation decisions.
 - **Per the mandate:** no claim of full alignment is made on the strength of passing tests alone, and no Mainnet-readiness claim is made. The repository is positioned for an ALIGNED verdict at the next audit once the O4-approved lifecycle implementation and the owner-gated items above land.
 
-**Implementation stops here. The code change set remains uncommitted in the local audit working tree — complete, verified, and reversible; no code has been committed, pushed, merged, or deployed. Only this report and the design document are delivered, as docs-only PR #11, per owner instruction.**
+**Implementation stops here. The code change set remains uncommitted in the local audit working tree — complete, verified, and reversible; no code has been committed, pushed, merged, or deployed. Only this report and the design document are delivered, as docs-only PR #12, per owner instruction.**
