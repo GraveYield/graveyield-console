@@ -32,8 +32,10 @@ Ownership rules (no overlaps, no inference):
 - **Anchor absence** means "no Phase 1 pass exists on chain" — nothing more. It is NOT
   "discovered-and-evaluated-eligible"; the console never renders eligibility intent from absence.
 - **`firstEligibleEpoch`** (anchor) and the **live epoch** together own the
-  waiting-for-epoch-confirmation vs certification-eligible distinction. The console does not
-  decide eligibility — it reports what the scanner's own Phase-1 record + the epoch clock show.
+  waiting-epochs vs re-evaluation-window-reached distinction (the alignment brief's "waiting for
+  epoch confirmation" vs "certification eligible for evaluation"). The console does not decide
+  eligibility — it reports what the scanner's own Phase-1 record + the epoch clock show, and the
+  window state asserts nothing about whether the second evaluation happens or succeeds.
 - **`expiresAt`** (cert) owns certificate expiry. It is an on-chain i64 (unix seconds), not a
   client-side TTL guess.
 - **`invalidated`** (anchor) owns invalidation — set only by the scanner's multisig-only
@@ -105,94 +107,133 @@ does not silently change state vocabulary per row — that keeps the table's pro
   transports) with per-fact error strings. The client re-validates the payload with the same
   fail-closed parser (client-side revalidation is a preservation requirement).
 - Program ownership check at the transport: `getAccountInfo` returns `owner`; a PDA whose owner
-  is not the expected program is treated as **not found** (see §6.3), never decoded.
+  is not the expected program is **`unavailable` with reason `ownership-mismatch`** (see §6.3) —
+  never decoded, and never treated as absence: an account at the expected address with an
+  unexpected owner is an identity anomaly, which is not evidence that the account does not exist.
 
 ## 5. State derivation — a pure, total function
 
 A new pure module `src/lib/gy/lifecycle.ts` (no React, no fetch — fully unit-testable):
 
 ```ts
+/**
+ * One canonical read outcome per account. The three statuses are mutually exclusive
+ * and the distinction is load-bearing (review correction, PR #12):
+ *   - "present"     — the account exists, is owned by the expected program, and decoded.
+ *   - "absent"       — the RPC lookup SUCCEEDED and returned null: proven non-existence.
+ *   - "unavailable"  — the console does NOT know whether the account exists (RPC failure,
+ *     malformed payload, or ownership anomaly). Unavailability is never mapped to absence.
+ */
+export type AccountRead<T> =
+  | { status: "present"; account: T }
+  | { status: "absent" }
+  | { status: "unavailable"; reason: AccountReadFailure };
+
+export type AccountReadFailure =
+  | { kind: "rpc-error"; detail: string }            // transport / timeout / HTTP (redacted detail)
+  | { kind: "malformed"; detail: string }            // discriminator mismatch, truncation, bad shape
+  | { kind: "ownership-mismatch"; detail: string };  // exists at the PDA but owner ≠ expected program
+
+export type EpochRead =
+  | { status: "present"; epoch: number }
+  | { status: "unavailable"; reason: { kind: "rpc-error"; detail: string } };
+
 export interface LifecycleReads {
-  anchor: EligibilityAnchor | null;   // null = account absent or unreadable-for-a-stated-reason
-  cert:   EligibilityCert | null;
-  registry: PoolRegistry | null;
-  receipt:  SalvageReceipt | null;
-  currentEpoch: number | null;        // from getEpochInfo; null = unavailable
-  nowUnix: number;                    // caller's clock (explicit argument, never Date.now() inside)
+  anchor:   AccountRead<EligibilityAnchor>;
+  cert:     AccountRead<EligibilityCert>;
+  registry: AccountRead<PoolRegistry>;
+  receipt:  AccountRead<SalvageReceipt>;   // optional detail; its read never degrades the state
+  currentEpoch: EpochRead;                 // the only clock the gap math may use
+  nowUnix: number;                         // caller's clock (explicit argument, never Date.now() inside)
 }
 
 export type LifecycleState =
-  | "unavailable"                     // cannot see the chain — honest unknown, NOT "discovered"
-  | "discovered"                      // on-chain reads succeeded; no anchor, no registry
-  | "anchored"                        // anchor present, not invalidated, epoch gap < 2
-  | "waiting-epochs"                  // anchored; currentEpoch − firstEligibleEpoch < 2 (fact-reporting)
-  | "certification-ready"             // anchored; gap ≥ 2; no cert
+  | "unavailable"                     // a required read is unavailable, or an impossible shape appeared
+  | "discovered"                      // anchor, cert AND registry all PROVEN absent (successful reads)
+  | "anchored"                        // anchor proven present, not invalidated, no cert — epoch gap NOT derivable
+  | "waiting-epochs"                  // anchor present; gap derivable and < 2 (fact-reporting)
+  | "re-evaluation-window-reached"    // anchor present; gap ≥ 2; no cert — the interval elapsed, nothing about the outcome
   | "certified"                       // cert present and nowUnix < expiresAt
   | "certificate-expired"             // cert present and nowUnix ≥ expiresAt (finding 5.8)
   | "invalidated"                     // anchor.invalidated (finding 5.8)
   | "salvaged";                       // registry present
 ```
 
-Derivation order (first match wins; each line is a canonical fact, not a heuristic):
+State derivation — a precise, ordered, first-match-wins table. Every row consumes the
+`AccountRead.status` values of §5's model (this table replaces the earlier prose derivation; it
+is the normative transition table for the pure function):
 
-1. **Read failure / unavailable epoch where required** → `"unavailable"` (§6).
-2. `registry !== null` → `"salvaged"`. (Post-settlement, anchor/cert state is history; the
-   registry is the terminal fact. Receipt detail is displayed alongside, never required.)
-3. `anchor === null && cert === null` → `"discovered"`. (A cert cannot exist without an anchor on
-   canonical paths; if that impossible shape ever appears, it degrades to `"unavailable"` with a
-   reason — malformed, see §6.3.)
-4. `anchor.invalidated === true` → `"invalidated"`. (Even if a later cert exists — the scanner's
-   censor is authoritative for Phase 1; the sheet shows both facts.)
-5. cert present:
-   - `nowUnix < cert.expiresAt` → `"certified"` (TTL countdown = `expiresAt − nowUnix`).
-   - `nowUnix ≥ cert.expiresAt` → `"certificate-expired"`.
-6. cert absent, anchor present and `currentEpoch !== null`:
-   - `currentEpoch − firstEligibleEpoch < 2` → `"waiting-epochs"` (value: `gap / 2 epochs`).
-   - gap `≥ 2` → `"certification-ready"`.
-7. anchor present but `currentEpoch === null` → the gap is unknowable → the state renders as
-   `"anchored"` with the gap explicitly `"current epoch unavailable"` (the P4.2 D6 rule: a
-   hardcoded epoch can never manufacture progress).
+| # | Condition (rows evaluated in order; first match wins) | State | Notes |
+| --- | --- | --- | --- |
+| 1 | `anchor`, `cert` or `registry` has `status: "unavailable"` (any reason: `rpc-error`, `malformed`, `ownership-mismatch`) | `unavailable` | The per-fact reason is carried into the panel: the console can neither confirm nor deny accounts it could not read. `receipt` is never required — its unavailability only degrades the receipt detail chip (row 2). |
+| 2 | `registry.status === "present"` | `salvaged` | Terminal settlement fact; post-settlement anchor/cert state is history. Receipt displayed alongside when `present`; an `absent`/`unavailable` receipt renders as a partial detail row, never an error hiding the settlement. |
+| 3 | `anchor.status === "absent" && cert.status === "absent" && registry.status === "absent"` | `discovered` | Absence is only ever asserted from successful reads — proven non-existence, never a failed lookup. |
+| 4 | `cert.status === "present" && anchor.status === "absent"` (impossible shape) | `unavailable` | A cert without an anchor cannot occur on canonical paths; it is an identity anomaly, not a nameable state. Reason preserved in diagnostics. |
+| 5 | `anchor.status === "present" && anchor.account.invalidated` | `invalidated` | Even if a later cert exists — the scanner's censor is authoritative for Phase 1; the sheet shows both facts. |
+| 6 | `cert.status === "present" && nowUnix < cert.expiresAt` | `certified` | TTL countdown = `expiresAt − nowUnix`, derived client-side from the on-chain value. |
+| 7 | `cert.status === "present" && nowUnix ≥ cert.expiresAt` | `certificate-expired` | Transition happens when the client clock passes the on-chain `expiresAt`, labeled as client-clock-derived. |
+| 8 | `anchor.status === "present" && cert.status === "absent" && currentEpoch.status === "present"` | gap = `currentEpoch.epoch − anchor.firstEligibleEpoch`: `gap < 2` → `waiting-epochs` (value `gap / 2 epochs`); `gap ≥ 2` → `re-evaluation-window-reached` | The gap math uses only the anchor's own `firstEligibleEpoch` and the live epoch — nothing else. |
+| 9 | `anchor.status === "present" && cert.status === "absent" && currentEpoch.status === "unavailable"` | `anchored` | Existence is proven; the phase is not derivable. Gap chip renders `"current epoch unavailable"` (the P4.2 D6 rule: a hardcoded epoch can never manufacture progress). |
+
+Mutual exclusion (review correction, PR #12): the states are exclusive **by construction**.
+`anchored` is reachable ONLY through row 9 (epoch not derivable) — it asserts anchor EXISTENCE
+when the phase is unknowable, and is not a synonym for "gap < 2". `waiting-epochs` and
+`re-evaluation-window-reached` are reachable ONLY through row 8. No input can match two rows at
+once, so no state can become unreachable or ambiguous.
 
 **Canonical-state mapping notes (checked against the protocol docs):** the ten-state lifecycle in
 the alignment brief maps onto these on-chain-derivable states as:
 *Not evaluated* → `discovered` (only when reads SUCCEED and show absence) or `unavailable`;
 *Evaluation pending* → not console-visible (in-flight transaction; the console has no mempool
-view — deliberately out of scope); *Anchored* → `anchored`/`waiting-epochs` depending on the
-epoch clock; *Waiting for epoch confirmation* → `waiting-epochs`; *Certification eligible for
-evaluation* → `certification-ready`; *Certified* → `certified`; *Certificate expired* →
-`certificate-expired`; *Invalidated* → `invalidated`; *Salvaged* → `salvaged`; *Unresolved/
-unavailable evidence* → `unavailable`. **The console never collapses `unavailable` into
-`discovered`** — absence of a successful read is not evidence of absence of an anchor.
+view — deliberately out of scope); *Anchored* → `anchored` (existence; phase not derivable) or
+`waiting-epochs` (gap < 2, epoch clock readable); *Waiting for epoch confirmation* →
+`waiting-epochs`; *Certification eligible for evaluation* → `re-evaluation-window-reached`;
+*Certified* → `certified`; *Certificate expired* → `certificate-expired`; *Invalidated* →
+`invalidated`; *Salvaged* → `salvaged`; *Unresolved/unavailable evidence* → `unavailable`.
+**The console never collapses `unavailable` into `discovered`** — absence of a successful read
+is not evidence of absence of an anchor, and the `AccountRead` model makes that distinction
+enforceable by construction (§5, §6.1).
 
-**The scanner remains the eligibility authority.** `certification-ready` and `waiting-epochs`
-report the scanner's own Phase-1 record against the epoch clock; they do not assert "this pool is
-eligible" — the sheet wording will say what the anchor proves ("Phase 1 passed at epoch N per
-GraveScanner") and what remains ("Phase 2 is submitted by the fleet pipeline, not this console").
+**The scanner remains the eligibility authority.** `re-evaluation-window-reached` and
+`waiting-epochs` report the scanner's own Phase-1 record against the epoch clock; they do not
+assert "this pool is eligible" or "this pool passed the second evaluation". In particular,
+`re-evaluation-window-reached` means exactly: the two-epoch interval since the anchor's
+`firstEligibleEpoch` has elapsed, so the next evaluation MAY now be performed by the scanner
+side — it says nothing about whether that evaluation happens or succeeds. The sheet wording will
+say what the anchor proves ("Phase 1 passed at epoch N per GraveScanner") and what remains
+("Phase 2 is submitted by the fleet pipeline, not this console").
 
 ## 6. Failure handling (all fail-closed, all explicit)
 
 ### 6.1 Missing accounts
 `getAccountInfo` returning `null` on any PDA is a **legitimate fact** (accounts are
-init-once at their lifecycle step). Map per §5. Distinguish "absent" from "failed to look up" at
-the transport: only a clean `null` maps to absence; anything else maps to an error with a reason
-string carried into `unavailable`.
+init-once at their lifecycle step). Map per §5's table. The absence/failure distinction is
+enforced by the `AccountRead` type itself: only a successful lookup returning `null` constructs
+`{ status: "absent" }`; every failure path constructs `{ status: "unavailable", reason }`. A
+derivation row can therefore never read absence out of a failure — `discovered` and every other
+absence-consuming state are unreachable unless the reads genuinely succeeded.
 
 ### 6.2 RPC failures and partial reads
 - Route-level: any RPC throw produces the envelope's unavailable state with the redacted error
   string (host/URL never echoed — same redaction rule as B1).
 - Per-fact: with `getMultipleAccounts`, a per-account failure marks ONLY that account
-  unreadable; other facts still render, each with its own availability. A partially readable
-  pool renders the readable facts and explicit `"unavailable"` chips for the rest — never a
-  blended guess. If the anchor's availability is unknown, states that depend on it degrade to
-  `"unavailable"` per §5 (no cert-derived state is fabricated from a half-read).
+  `{ status: "unavailable", reason }`; other facts still render, each with its own status. A
+  partially readable pool renders the readable facts and explicit `"unavailable"` chips for the
+  rest — never a blended guess. Per §5 row 1, any required read being `unavailable` degrades the
+  whole state to `"unavailable"` (no cert-derived or absence-derived state is fabricated from a
+  half-read).
 
 ### 6.3 Malformed or incorrectly owned accounts
 - Discriminator mismatch (the SDK decoders assert), short data, or u64/i64 out of shape →
   `"unavailable"` + reason (`corrupt anchor account: discriminator mismatch`), surfaced in the
   sheet's diagnostics row. No partial decode of a mismatched account.
 - Wrong owner (PDA existing under the expected address but owned by a different program) →
-  treated as absent-for-derivation AND flagged in diagnostics (`unexpected account owner …`) —
-  it is a signal of identity misconfiguration that must be visible, not swallowed.
+  `{ status: "unavailable", reason: { kind: "ownership-mismatch", … } }`, surfaced in the
+  sheet's diagnostics row (`unexpected account owner …`). It is NOT treated as absence: an
+  account at the expected PDA with an unexpected owner is an identity or configuration anomaly —
+  the console can prove neither "the expected account exists" nor "it does not exist", so every
+  state that depends on that account degrades to `unavailable` per §5 row 1, with the reason
+  preserved and visible.
 - Malformed reads NEVER mutate the last good state; they only produce the current response's
   unavailability.
 
@@ -222,7 +263,8 @@ Per-pool request-versioning, the pattern `tx/reconcile.ts` and the snapshot tran
   - no "evaluation pending" fabrication while a transaction may be in flight;
   - no C1–C6 pass/fail display from chain reads (criteria display remains the snapshot's honest
     pending pins — the console still does not evaluate criteria);
-  - no "certification-ready" without the anchor's own `firstEligibleEpoch` AND a live epoch.
+  - no "re-evaluation-window-reached" without the anchor's own `firstEligibleEpoch` AND a live
+    epoch — and that state never asserts an evaluation outcome (§5's authority note).
 
 ## 8. Representation in the existing model (finding 5.8 vocabulary)
 
@@ -259,24 +301,30 @@ Per-pool request-versioning, the pattern `tx/reconcile.ts` and the snapshot tran
 All in the existing `bun test` battery, lib-level (component/DOM tests remain out of the
 console's test architecture):
 
-1. **Derivation truth table** (`lifecycle.test.ts`): for every state in §5, a fixtures-only test
-   builds synthetic `LifecycleReads` and asserts the exact `LifecycleState` + the values shown
-   (gap, TTL). Include the impossible-shape cases (cert without anchor → unavailable; registry +
+1. **Derivation truth table** (`lifecycle.test.ts`): for every row of §5's transition table, a
+   fixtures-only test builds synthetic `AccountRead` results (exercising `present`, `absent` and
+   `unavailable` per account) and asserts the exact `LifecycleState` + the values shown (gap,
+   TTL). Include the impossible-shape cases (cert without anchor → unavailable; registry +
    invalidated anchor → salvaged with a visible history note).
 2. **Fail-closed sweep**: missing/failed per-fact reads; epoch unavailable with anchor present →
    `anchored` + "current epoch unavailable"; all four accounts unreadable → `unavailable`.
-3. **Malformed accounts**: discriminator flip, truncation, wrong owner for each of the four
-   accounts → unavailable + reason; no partial decode.
+3. **Malformed / misowned accounts**: discriminator flip, truncation, and wrong owner for each
+   of the four accounts → `unavailable` + reason; no partial decode. The wrong-owner case is
+   additionally pinned to NEVER construct `{ status: "absent" }` — an ownership mismatch can
+   never produce `discovered` or any other absence-derived state (review correction, PR #12).
 4. **Staleness**: unit-test the seq/key application rule — a slow response for a previous pool
    key and an out-of-order seq are both discarded.
 5. **Route envelope**: param validation (bad base58, wrong length, mismatched pair), four-state
    envelope shape, no URL/host material in any reason string, `confirmed` commitment passed.
 6. **Vocabulary**: `POOL_STATE_META` covers every `PoolState` member (exhaustive keyset test);
    stepper index mapping for the three new states.
-7. **Boundary honesty**: a test asserting the derivation never returns
-   `certification-ready`/`waiting-epochs` when `currentEpoch === null`, and never returns any
-   lifecycle state from a snapshot-only input (the derivation requires the four on-chain reads;
-   feeding it `null` reads yields `unavailable` — this is the anti-inference pin).
+7. **Boundary honesty**: tests asserting (a) the derivation never returns
+   `re-evaluation-window-reached`/`waiting-epochs` when the epoch read is `unavailable` (that
+   path can only yield `anchored`); (b) the derivation never returns any lifecycle state from a
+   snapshot-only input (it requires the four on-chain `AccountRead` results; feeding it
+   all-`unavailable` reads yields `unavailable` — the anti-inference pin); and (c) `discovered`
+   is unreachable whenever any of anchor/cert/registry is `unavailable` — absence is only ever
+   asserted from successful reads (the absence-vs-failure pin, PR #12).
 
 ## 11. Implementation surface estimate (for the O4 decision)
 
