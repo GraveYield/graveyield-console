@@ -17,7 +17,43 @@ export const PROTOCOL_CONFIG_DISCRIMINATOR = new Uint8Array([
   0xcf, 0x5b, 0xfa, 0x1c, 0x98, 0xb3, 0xd7, 0xd1,
 ]); // sha256("account:ProtocolConfig")[0..8] — same account name in both programs
 
-export const DEFAULT_DEVNET_RPC_HOST = "api.devnet.solana.com";
+/**
+ * Single documented RPC configuration source (audit finding 5.4).
+ *
+ * The wallet connection (providers.tsx), the protocol pulse, the epoch
+ * telemetry AND the cluster-identity verification (finding 5.5) all resolve
+ * to the SAME endpoint: `NEXT_PUBLIC_SOLANA_RPC_URL` when set, otherwise the
+ * public devnet host. There is deliberately no second configuration
+ * variable — a private/quota-ed endpoint configured for the wallet must
+ * serve every read this console makes, so all data surfaces come from one
+ * place and the displayed host always corresponds to the endpoint used.
+ */
+export const DEFAULT_DEVNET_RPC_URL = "https://api.devnet.solana.com";
+
+/** The one RPC endpoint the console reads from (env-overridable, devnet fallback). */
+export function configuredRpcEndpoint(): string {
+  const raw = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+  if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
+  return DEFAULT_DEVNET_RPC_URL;
+}
+
+/**
+ * Redacted endpoint for display and diagnostics (finding 5.4): scheme +
+ * host (+ path) with credentials and query strings stripped — some devnet
+ * providers carry API keys in the query string, and no key may leak into a
+ * client-visible surface. Unparsable input never throws; it renders a
+ * placeholder instead of a guess.
+ */
+export function redactRpcEndpoint(endpoint: string): string {
+  try {
+    const u = new URL(endpoint);
+    const auth = u.username || u.password ? "<redacted>@" : "";
+    const path = u.pathname && u.pathname !== "/" ? u.pathname : "";
+    return `${u.protocol}//${auth}${u.host}${path}`;
+  } catch {
+    return "<unparsable endpoint>";
+  }
+}
 
 export interface ScannerConfigLive {
   authority: string;
@@ -181,8 +217,8 @@ interface RpcAccountInfo {
 }
 
 /** Minimal JSON-RPC getAccountInfo — base64 payload, no web3.js dependency. */
-async function getAccountInfo(host: string, address: string): Promise<RpcAccountInfo | null> {
-  const res = await fetch(`https://${host}`, {
+async function getAccountInfo(rpcEndpoint: string, address: string): Promise<RpcAccountInfo | null> {
+  const res = await fetch(rpcEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -207,7 +243,7 @@ function b64ToBytes(b64: string): Uint8Array {
 }
 
 async function readProgram<C>(
-  host: string,
+  rpcEndpoint: string,
   programId: string,
   configPda: string,
   decode: (data: Uint8Array) => C,
@@ -220,13 +256,13 @@ async function readProgram<C>(
     configError: null,
   };
   try {
-    const prog = await getAccountInfo(host, programId);
+    const prog = await getAccountInfo(rpcEndpoint, programId);
     pulse.executable = prog ? prog.executable : false;
   } catch {
     pulse.executable = null; // lookup unavailable — recorded, not guessed
   }
   try {
-    const cfg = await getAccountInfo(host, configPda);
+    const cfg = await getAccountInfo(rpcEndpoint, configPda);
     if (!cfg) {
       pulse.configError = "config PDA not found on devnet";
     } else {
@@ -238,13 +274,76 @@ async function readProgram<C>(
   return pulse;
 }
 
-/** Fetch the full pulse. Partial availability is preserved per program. */
-export async function fetchProtocolPulse(rpcHost: string = DEFAULT_DEVNET_RPC_HOST): Promise<ProtocolPulse> {
+/** Fetch the full pulse. Partial availability is preserved per program.
+ * Reads the console's single configured RPC endpoint by default
+ * (audit finding 5.4); `rpcHost` in the result is the REDACTED endpoint
+ * actually fetched (query strings/credentials never render). */
+export async function fetchProtocolPulse(rpcEndpoint: string = configuredRpcEndpoint()): Promise<ProtocolPulse> {
   const [scanner, vault] = await Promise.all([
-    readProgram(rpcHost, PROGRAM_IDS.graveScanner, PROGRAM_IDS.scannerConfigPda, decodeScannerConfigLive),
-    readProgram(rpcHost, PROGRAM_IDS.graveVault, PROGRAM_IDS.vaultConfigPda, decodeVaultConfigLive),
+    readProgram(rpcEndpoint, PROGRAM_IDS.graveScanner, PROGRAM_IDS.scannerConfigPda, decodeScannerConfigLive),
+    readProgram(rpcEndpoint, PROGRAM_IDS.graveVault, PROGRAM_IDS.vaultConfigPda, decodeVaultConfigLive),
   ]);
-  return { fetchedAtUnixMs: Date.now(), rpcHost, scanner, vault };
+  return { fetchedAtUnixMs: Date.now(), rpcHost: redactRpcEndpoint(rpcEndpoint), scanner, vault };
+}
+
+/* ── Cluster identity (P4.2, audit finding 5.5) ────────────────────
+   The console serves an operational UI whose reads must land on the cluster
+   they claim to. A hardcoded "Solana devnet" badge asserts an identity it
+   never verifies — a misconfigured NEXT_PUBLIC_SOLANA_RPC_URL would run
+   wallet reads against a foreign cluster under a devnet label. The endpoint's
+   genesis hash is the chain-level identity anchor (a URL is not; a wallet
+   connection is not): read it once per load, compare against the canonical
+   devnet genesis, and let the UI show verified/unverified — never an
+   unverified assertion. Read-only; no polling. */
+
+/** Canonical Solana devnet genesis hash — pinned in graveyield-protocol
+ * scripts/devnet/ns3_identities.mjs (the deployment tooling's own
+ * --expected-genesis-hash check). */
+export const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
+
+/**
+ * Read the connected endpoint's genesis hash via JSON-RPC getGenesisHash.
+ * Fails closed: a non-ok/error/unusable answer throws (the caller renders
+ * an explicit unverified state — never a guess).
+ */
+export async function fetchGenesisHash(
+  rpcEndpoint: string = configuredRpcEndpoint(),
+): Promise<string> {
+  const res = await fetch(rpcEndpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getGenesisHash", params: [] }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`rpc http ${res.status}`);
+  const json = (await res.json()) as { result?: { value?: unknown }; error?: unknown };
+  if (json.error) throw new Error("rpc returned an error");
+  const value = json.result?.value;
+  // Structural validation: a genesis hash is a non-trivial base58 string.
+  if (typeof value !== "string" || value.length < 32 || value.length > 50 || /\s/.test(value)) {
+    throw new Error("getGenesisHash returned an unusable payload");
+  }
+  return value;
+}
+
+export type ClusterIdentity =
+  | { status: "verified"; cluster: "devnet"; genesisHash: string }
+  | { status: "unverified"; reason: string };
+
+/**
+ * Classify an endpoint's genesis hash against the canonical devnet genesis.
+ * Pure and total: any non-matching / missing input maps to an explicit
+ * unverified state with a reason — the caller can never accidentally render
+ * a verified badge from unverified data.
+ */
+export function classifyCluster(genesisHash: string | null | undefined): ClusterIdentity {
+  if (typeof genesisHash !== "string" || genesisHash.length === 0) {
+    return { status: "unverified", reason: "genesis hash unavailable" };
+  }
+  if (genesisHash === DEVNET_GENESIS_HASH) {
+    return { status: "verified", cluster: "devnet", genesisHash };
+  }
+  return { status: "unverified", reason: "endpoint genesis hash does not match Solana devnet" };
 }
 
 /* ── Epoch telemetry (P4.2, audit D6) ────────────────────────────
@@ -275,9 +374,9 @@ function asNonNegativeInt(v: unknown): number | null {
 }
 
 export async function fetchEpochTelemetry(
-  rpcHost: string = DEFAULT_DEVNET_RPC_HOST,
+  rpcEndpoint: string = configuredRpcEndpoint(),
 ): Promise<EpochTelemetry> {
-  const res = await fetch(`https://${rpcHost}`, {
+  const res = await fetch(rpcEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getEpochInfo", params: [] }),
@@ -297,7 +396,7 @@ export async function fetchEpochTelemetry(
   }
   return {
     fetchedAtUnixMs: Date.now(),
-    rpcHost,
+    rpcHost: redactRpcEndpoint(rpcEndpoint),
     epoch,
     progress: Math.min(1, Math.max(0, slotIndex / slotsInEpoch)),
   };

@@ -274,6 +274,18 @@ export const SNAPSHOT_CLOCK_SKEW_TOLERANCE_MS = 5 * 60_000;
  * truthfully in the "discovered" state; score is NOT fabricated (0) —
  * snapshot-mode views must sort by real quantities (TVL, last activity).
  * C2/C4/C5/C6 ride along as pending via `snapshotCriteria`.
+ *
+ * Display orientation (audit finding 5.1): the indexer fills baseMint/
+ * quoteMint from the RAW Raydium coin-vault-mint / pc-vault-mint slices in
+ * account order (grave-indexer discovery.ts) with no normalization, so
+ * `baseMint` is WSOL for every pool whose WSOL side is the Raydium "coin"
+ * side (`coinIsWsol: true`). The displayed token is therefore derived from
+ * `wsolSide.memecoinMint` — the dedicated, orientation-independent WSOL-side
+ * witness — never from `baseMint`, and never from a shortened display
+ * string. WSOL stays the quote asset in both orientations. Reserve
+ * interpretation and economics are unchanged: `wsolReserveLamports` is the
+ * WSOL side and `memecoinReserveRaw` the memecoin side regardless of
+ * coin/pc ordering.
  */
 export function poolFromSnapshot(p: SnapshotPool, snap: ConsoleSnapshot): Pool {
   const lpSupplyBig = BigInt(p.lpSupplyRaw);
@@ -285,10 +297,10 @@ export function poolFromSnapshot(p: SnapshotPool, snap: ConsoleSnapshot): Pool {
     : "Last activity not derivable in this snapshot run — shown as unavailable, not zero.";
   return {
     address: p.address,
-    // Truthful labels: the quote side is WSOL by the 7019 guard; the base
-    // side is identified by its mint (symbols would require an off-chain
-    // registry — none is trusted here).
-    baseSymbol: `mint:${shortAddr(p.baseMint, 4, 4)}`,
+    // Truthful labels: the quote side is WSOL by the 7019 guard; the traded
+    // token is the memecoin identified by the snapshot's wsolSide witness
+    // (symbols would require an off-chain registry — none is trusted here).
+    baseSymbol: `mint:${shortAddr(p.wsolSide.memecoinMint, 4, 4)}`,
     quoteSymbol: "WSOL",
     amm: "Raydium V4",
     quoteReserveLamports: BigInt(p.wsolReserveLamports),
@@ -317,6 +329,15 @@ export function poolFromSnapshot(p: SnapshotPool, snap: ConsoleSnapshot): Pool {
       memecoinReserveRaw: p.memecoinReserveRaw,
       lpSupplyRaw: p.lpSupplyRaw,
       lastSwap: p.lastSwap,
+    },
+    // Real mint identities (audit finding 5.11): full addresses from the
+    // snapshot, carried so calculation inputs (estimator orientation) never
+    // depend on the shortened display label in baseSymbol.
+    snapshotMints: {
+      baseMint: p.baseMint,
+      quoteMint: p.quoteMint,
+      memecoinMint: p.wsolSide.memecoinMint,
+      coinIsWsol: p.wsolSide.coinIsWsol,
     },
   };
 }

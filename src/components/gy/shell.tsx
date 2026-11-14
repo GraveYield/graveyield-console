@@ -22,9 +22,54 @@ import {
   Wallet,
 } from "lucide-react";
 import { ToneBadge } from "./widgets";
-import { fetchEpochTelemetry, type EpochTelemetry } from "@/lib/gy/protocolLive";
+import {
+  classifyCluster,
+  fetchEpochTelemetry,
+  fetchGenesisHash,
+  type ClusterIdentity,
+  type EpochTelemetry,
+} from "@/lib/gy/protocolLive";
 
 export type ViewId = "overview" | "graveyard" | "fleet" | "claims" | "protocol";
+
+/* ── Cluster identity (audit finding 5.5) ──────────────────────────
+   The cluster label is VERIFIED via the endpoint's genesis hash, never
+   asserted. One read-only getGenesisHash per page load (module-level
+   singleton: the top bar and the wallet menu share the same identity),
+   classified against the canonical devnet genesis. Null while the check is
+   in flight; an explicit unverified state with a reason when the read fails
+   or the hash mismatches — a misconfigured endpoint can no longer run under
+   a devnet label. Read-only; no polling. */
+let clusterIdentityPromise: Promise<ClusterIdentity> | null = null;
+function clusterIdentity(): Promise<ClusterIdentity> {
+  if (clusterIdentityPromise === null) {
+    clusterIdentityPromise = fetchGenesisHash()
+      .then((h) => classifyCluster(h))
+      .catch(
+        (err): ClusterIdentity => ({
+          status: "unverified",
+          reason: `RPC unreachable — cluster identity could not be verified (${String(
+            (err as Error).message ?? err,
+          ).slice(0, 80)})`,
+        }),
+      );
+  }
+  return clusterIdentityPromise;
+}
+
+function useClusterIdentity(): ClusterIdentity | null {
+  const [identity, setIdentity] = useState<ClusterIdentity | null>(null);
+  useEffect(() => {
+    let alive = true;
+    clusterIdentity().then((c) => {
+      if (alive) setIdentity(c);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return identity;
+}
 
 export const NAV: { id: ViewId; label: string; icon: React.ElementType; hint: string }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, hint: "Protocol pulse" },
@@ -92,6 +137,9 @@ function WalletButton() {
   const { wallets, wallet, select, connect, disconnect, connecting, connected, publicKey } =
     useWallet();
   const { connection } = useConnection();
+  /* Audit finding 5.5: the balance line's cluster label follows the VERIFIED
+   * cluster identity — never a hardcoded devnet assertion. */
+  const cluster = useClusterIdentity();
   const [open, setOpen] = useState(false);
   const [bal, setBal] = useState<{ key: string; value: number } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -219,7 +267,12 @@ function WalletButton() {
                   </button>
                 </div>
                 <p className="mt-1 font-mono text-[11px] tabular-nums text-slate-500">
-                  {balance === null ? "—" : (balance / 1e9).toFixed(4)} SOL · devnet
+                  {balance === null ? "—" : (balance / 1e9).toFixed(4)} SOL ·{" "}
+                  {cluster === null
+                    ? "…"
+                    : cluster.status === "verified"
+                      ? "devnet"
+                      : "cluster unverified"}
                 </p>
               </div>
               <a
@@ -305,6 +358,8 @@ function TopBar() {
      epoch number. */
   const [epoch, setEpoch] = useState<EpochTelemetry | null>(null);
   const [epochState, setEpochState] = useState<"checking" | "live" | "unavailable">("checking");
+  /* P4.2 (audit finding 5.5) — verified cluster identity (genesis hash). */
+  const cluster = useClusterIdentity();
   useEffect(() => {
     let alive = true;
     fetchEpochTelemetry()
@@ -370,9 +425,27 @@ function TopBar() {
             <span className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
               Cluster
             </span>
-            <ToneBadge tone="brand" dot>
-              Solana devnet
-            </ToneBadge>
+            {/* Audit finding 5.5: verified only when the endpoint's genesis
+             * hash matches the canonical devnet genesis; an explicit
+             * unverified state otherwise (RPC failure, unusable or
+             * mismatching hash). Never an unverified assertion. */}
+            {cluster === null ? (
+              <ToneBadge tone="muted" title="verifying the endpoint's genesis hash…">
+                checking cluster…
+              </ToneBadge>
+            ) : cluster.status === "verified" ? (
+              <ToneBadge
+                tone="brand"
+                dot
+                title={`verified: endpoint genesis hash ${cluster.genesisHash} matches Solana devnet (getGenesisHash, read-only)`}
+              >
+                Solana devnet
+              </ToneBadge>
+            ) : (
+              <ToneBadge tone="warn" dot title={cluster.reason}>
+                Cluster unverified
+              </ToneBadge>
+            )}
           </div>
         </div>
         <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
@@ -457,8 +530,12 @@ export function Shell({
           <main className="flex-1 px-4 pb-28 pt-5 sm:px-6 lg:pb-10">{children}</main>
           <footer className="mt-auto border-t border-white/8 bg-[#161616]/70 px-4 pt-5 pb-28 sm:px-6 lg:pb-24">
             <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* Audit finding 5.7: the console is mixed-data — Graveyard,
+                  Fleet, Claims and Protocol read real protocol/indexer/fleet
+                  sources; only the Overview feed is simulated. Each view
+                  labels its own provenance; the footer says exactly that. */}
               <p className="text-[11.5px] text-slate-500">
-                Simulated telemetry · not financial advice
+                Per-view data provenance: real / simulated, labeled on every view · not financial advice
               </p>
               <p className="font-mono text-[10.5px] text-slate-600">Apache-2.0</p>
             </div>

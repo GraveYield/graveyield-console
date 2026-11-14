@@ -16,6 +16,7 @@ import {
   fmtUtcClock,
   formatCollapseCell,
   formatIdleDaysCell,
+  formatScoreCell,
   POOL_STATE_META,
 } from "../format";
 
@@ -141,5 +142,24 @@ describe("formatCollapseCell (graveyard table Collapse cell)", () => {
     expect(formatCollapseCell(9_982, false)).toBe("99.8%");
     expect(formatCollapseCell(9_900, false)).toBe("99.0%");
     expect(formatCollapseCell(0, false)).toBe("0.0%");
+  });
+});
+
+describe("formatScoreCell (graveyard table Score cell — audit finding 5.13)", () => {
+  test("regression: snapshot pools without a real score render an em-dash — never a numeric 0.00", () => {
+    // Snapshot rows carry score: 0 as an explicit NOT-fabricated placeholder;
+    // the old cell rendered it as a meaningful-looking 0.00.
+    expect(formatScoreCell(0, true)).toBe("—");
+    // Even a nonzero score on a snapshot row stays withheld: the column is
+    // unavailable in snapshot mode, not "zero".
+    expect(formatScoreCell(0.94, true)).toBe("—");
+  });
+
+  test("fixture scores keep the numeric two-decimal display", () => {
+    expect(formatScoreCell(0.94, false)).toBe("0.94");
+    expect(formatScoreCell(0, false)).toBe("0.00");
+    // 0.815 is 0.8149999… in binary float — the displayed value follows the
+    // platform's toFixed behavior (documents the actual display contract).
+    expect(formatScoreCell(0.815, false)).toBe("0.81");
   });
 });

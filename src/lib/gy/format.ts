@@ -61,6 +61,19 @@ export function formatCollapseCell(collapseBps: number, pending: boolean): strin
   return `${(collapseBps / 100).toFixed(1)}%`;
 }
 
+/**
+ * Graveyard table "Score" cell (audit finding 5.13). Snapshot-backed pools
+ * carry NO operator score — the scout score is a fixture-era concept and
+ * snapshot rows carry `score: 0` as an explicit not-fabricated placeholder.
+ * Rendering 0.00 implied a meaningful number; the honest display is an
+ * explicit unavailable placeholder, same pattern as formatCollapseCell.
+ * Fixture rows (unavailable=false) keep the numeric display unchanged.
+ */
+export function formatScoreCell(score: number, unavailable: boolean): string {
+  if (unavailable) return "—";
+  return score.toFixed(2);
+}
+
 export function fmtUtcClock(d: Date): string {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mm = String(d.getUTCMinutes()).padStart(2, "0");

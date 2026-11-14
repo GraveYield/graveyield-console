@@ -94,6 +94,104 @@ describe("snapshot loader — committed artifact", () => {
   });
 });
 
+/* ── Token orientation (audit finding 5.1) ──────────────────────────────
+ * The indexer fills baseMint/quoteMint from the RAW Raydium coin/pc vault
+ * mint slices in account order — for pools whose WSOL side is the Raydium
+ * "coin" side (wsolSide.coinIsWsol: true), baseMint IS the WSOL mint and
+ * the traded memecoin rides in wsolSide.memecoinMint. The displayed token
+ * must be the memecoin in BOTH orientations; WSOL is always the quote.
+ * These tests exercise the actual snapshot→pool mapping over the committed
+ * artifact, not an isolated formatting helper. */
+describe("poolFromSnapshot — token orientation (audit finding 5.1)", () => {
+  const WSOL = "So11111111111111111111111111111111111111112";
+
+  /** first/last-4 segments the shortAddr label is built from. */
+  const labelSegments = (mint: string) => `${mint.slice(0, 4)}…${mint.slice(-4)}`;
+
+  test("the committed artifact contains both Raydium orientations (fixture validity)", () => {
+    const coinIsWsol = SNAPSHOT.pools.filter((p) => p.wsolSide.coinIsWsol);
+    const pcIsWsol = SNAPSHOT.pools.filter((p) => !p.wsolSide.coinIsWsol);
+    expect(coinIsWsol.length).toBeGreaterThan(0);
+    expect(pcIsWsol.length).toBeGreaterThan(0);
+    expect(coinIsWsol.length + pcIsWsol.length).toBe(SNAPSHOT.pools.length);
+  });
+
+  test("coinIsWsol:true pools — displayed token is the memecoin, NOT the WSOL mint", () => {
+    for (const p of SNAPSHOT.pools.filter((x) => x.wsolSide.coinIsWsol)) {
+      const pool = poolFromSnapshot(p, SNAPSHOT);
+      // The coin-side mint IS WSOL here — the old mapping displayed it as
+      // the traded token. The label must carry the memecoin instead.
+      expect(p.baseMint).toBe(WSOL);
+      expect(p.wsolSide.memecoinMint).not.toBe(WSOL);
+      expect(pool.baseSymbol).toBe(`mint:${labelSegments(p.wsolSide.memecoinMint)}`);
+      expect(pool.baseSymbol).not.toContain(labelSegments(WSOL));
+      // WSOL stays the quote asset.
+      expect(pool.quoteSymbol).toBe("WSOL");
+      // Real mints are carried for calculation inputs (finding 5.11).
+      expect(pool.snapshotMints).toEqual({
+        baseMint: p.baseMint,
+        quoteMint: p.quoteMint,
+        memecoinMint: p.wsolSide.memecoinMint,
+        coinIsWsol: true,
+      });
+    }
+  });
+
+  test("coinIsWsol:false pools — memecoin identification unchanged (no regression)", () => {
+    for (const p of SNAPSHOT.pools.filter((x) => !x.wsolSide.coinIsWsol)) {
+      const pool = poolFromSnapshot(p, SNAPSHOT);
+      // Raw coin side already holds the memecoin — the label must equal it.
+      expect(p.wsolSide.memecoinMint).toBe(p.baseMint);
+      expect(pool.baseSymbol).toBe(`mint:${labelSegments(p.wsolSide.memecoinMint)}`);
+      expect(pool.quoteSymbol).toBe("WSOL");
+      expect(pool.snapshotMints).toEqual({
+        baseMint: p.baseMint,
+        quoteMint: p.quoteMint,
+        memecoinMint: p.wsolSide.memecoinMint,
+        coinIsWsol: false,
+      });
+    }
+  });
+
+  test("every mapped pool: label is the wsolSide memecoin and WSOL is the quote — both orientations", () => {
+    for (const p of SNAPSHOT.pools) {
+      const pool = poolFromSnapshot(p, SNAPSHOT);
+      expect(pool.baseSymbol).toBe(`mint:${labelSegments(p.wsolSide.memecoinMint)}`);
+      expect(pool.quoteSymbol).toBe("WSOL");
+      // Orientation consistency of the snapshot's own witness fields.
+      if (p.wsolSide.coinIsWsol) {
+        expect(p.baseMint).toBe(WSOL);
+        expect(p.quoteMint).toBe(p.wsolSide.memecoinMint);
+      } else {
+        expect(p.quoteMint).toBe(WSOL);
+        expect(p.baseMint).toBe(p.wsolSide.memecoinMint);
+      }
+    }
+  });
+
+  test("reserve interpretation and economics are orientation-independent (unchanged)", () => {
+    for (const p of SNAPSHOT.pools) {
+      const pool = poolFromSnapshot(p, SNAPSHOT);
+      // quoteReserveLamports is ALWAYS the WSOL side; baseReserve ALWAYS the
+      // memecoin side — the fix touches labels only, never reserves.
+      expect(pool.quoteReserveLamports).toBe(BigInt(p.wsolReserveLamports));
+      expect(pool.baseReserve).toBe(BigInt(p.memecoinReserveRaw));
+      expect(pool.baseDecimals).toBe(p.memecoinDecimals);
+    }
+  });
+
+  test("labels are display strings — no token identity is inferred from a shortened label", () => {
+    for (const p of SNAPSHOT.pools) {
+      const pool = poolFromSnapshot(p, SNAPSHOT);
+      // The label shortens the mint with an ellipsis — it cannot round-trip
+      // to an identity; the full mint lives in snapshotMints only.
+      expect(pool.baseSymbol).toContain("…");
+      expect(pool.baseSymbol.length).toBeLessThan(p.wsolSide.memecoinMint.length);
+      expect(pool.snapshotMints!.memecoinMint).toBe(p.wsolSide.memecoinMint);
+    }
+  });
+});
+
 describe("snapshot loader — fail-closed validation", () => {
   test("rejects wrong schemaVersion", () => {
     expect(() => parseSnapshot(corrupt((s) => { s.schemaVersion = 2; }))).toThrow(SnapshotError);

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { CopyChip, MiniStat, SectionHead, ToneBadge } from "./widgets";
 import { CHARTER_INVARIANTS, CONFIG, PROGRAM_IDS } from "@/lib/gy/data";
+import { SCANNER_IX, VAULT_IX } from "@/lib/gy/reference";
 import {
   fetchProtocolPulse,
   type ProtocolPulse,
@@ -110,25 +111,6 @@ const ALL_ERRORS: { program: string; code: number; name: string; condition: stri
   ...SCANNER_ERRORS.map(([code, name, condition]) => ({ program: "GraveScanner", code, name, condition })),
   ...VAULT_ERRORS.map(([code, name, condition]) => ({ program: "GraveVault", code, name, condition })),
 ];
-
-const SCANNER_IX = [
-  ["initialize", "Creates ProtocolConfig — thresholds, cert TTL, pause flag."],
-  ["record_launch_price", "Init-once LaunchPrice PDA (C2 baseline) from an oracle-signed attestation."],
-  ["evaluate_pool_phase_1", "Evaluates all six criteria; writes the EligibilityAnchor (first_eligible_epoch)."],
-  ["evaluate_pool_phase_2", "Re-evaluates after the epoch gap; bitmap equality required; issues the EligibilityCert."],
-  ["invalidate_anchor", "Multisig-only censor of a wrong Phase 1 pass."],
-  ["sweep_stale_anchor", "Permissionless rent reclaim for anchors older than 14 days."],
-  ["update_protocol_config", "Multisig-only bounded threshold updates."],
-  ["emergency_pause", "Multisig-only pause; gates evaluate_pool_* only."],
-] as const;
-
-const VAULT_IX = [
-  ["initialize", "Creates ProtocolConfig — 40/40/20 shares, fee/slippage/dust params, pause flag."],
-  ["salvage_pool", "The settlement instruction. One salvage per pool, ever."],
-  ["claim_lp_proceeds", "Merkle-verified pro-rata withdrawal — live during pause."],
-  ["update_protocol_config", "Multisig-only share updates; 20% ceiling enforced on-chain."],
-  ["emergency_pause", "Multisig-only pause; gates salvage_pool only."],
-] as const;
 
 const PDAS = [
   ["ProtocolConfig", "both", "[\"protocol_config\"]", "governance-writable"],

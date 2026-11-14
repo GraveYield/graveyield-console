@@ -63,6 +63,22 @@ export interface Pool {
     lpSupplyRaw: string;
     lastSwap: { unixTs: number; slot: number; signature: string } | null;
   };
+  /**
+   * Real mint identities from the snapshot (full addresses, unshortened).
+   * Present only on snapshot rows. Display labels (baseSymbol) are
+   * shortened and must NEVER feed calculations — consumers needing a mint
+   * identity (e.g. the estimator's 7019 orientation guard) read it here.
+   * `coinIsWsol` mirrors the snapshot's wsolSide witness: when true, the
+   * Raydium coin-side mint (baseMint) IS the WSOL mint and the memecoin
+   * rides on the pc side (quoteMint) in raw account order.
+   */
+  snapshotMints?: {
+    baseMint: string;
+    quoteMint: string;
+    /** The traded (non-WSOL) token — orientation-independent. */
+    memecoinMint: string;
+    coinIsWsol: boolean;
+  };
 }
 
 /** Data-state vocabulary used across the console (P3-A). */

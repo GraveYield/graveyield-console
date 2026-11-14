@@ -39,11 +39,11 @@ import {
 } from "lucide-react";
 import { CriteriaChips, SectionHead, ToneBadge, CopyChip, criterionTone, useNow } from "./widgets";
 import type { Pool, PoolState } from "@/lib/gy/types";
-import { criteriaOf, estimateSalvageEconomics, WSOL_MINT } from "@/lib/gy/estimator";
+import { criteriaOf, estimateSalvageEconomics, estimatorPoolInputs } from "@/lib/gy/estimator";
 import { fetchProtocolPulse, type ProtocolPulse } from "@/lib/gy/protocolLive";
 import { snapshotCriteriaOf, type ConsoleSnapshot } from "@/lib/gy/snapshotContract";
 import type { SnapshotTransportPayload } from "@/lib/gy/snapshotTransport";
-import { fmtDuration, fmtNum, fmtSol, fmtUtcClock, formatCollapseCell, formatIdleDaysCell, POOL_STATE_META, shortAddr } from "@/lib/gy/format";
+import { fmtDuration, fmtNum, fmtSol, fmtUtcClock, formatCollapseCell, formatIdleDaysCell, formatScoreCell, POOL_STATE_META, shortAddr } from "@/lib/gy/format";
 import { cn } from "@/lib/utils";
 
 type SortKey = "score" | "tvl" | "inactivity";
@@ -105,6 +105,13 @@ export function Graveyard({
   const [query, setQuery] = useState("");
   // Snapshot rows carry no fabricated score — default to sorting by real TVL.
   const [sortKey, setSortKey] = useState<SortKey>("tvl");
+
+  /* Audit finding 5.13: the Graveyard is a snapshot-backed table — its rows
+   * carry NO operator score, so score sorting is withheld when every row is
+   * a snapshot row (a sort over identical not-fabricated zeros would only
+   * imply meaningful scores exist). Fixture rows keep the numeric score and
+   * its sorting. */
+  const allSnapshotRows = pools.length > 0 && pools.every((p) => p.snapshotMeta !== undefined);
 
   const rows = useMemo(() => {
     const f = FILTERS.find((x) => x.id === filter) ?? FILTERS[0];
@@ -235,9 +242,15 @@ export function Graveyard({
                 </th>
                 <th className="px-4 py-3 text-right font-medium">Collapse</th>
                 <th className="px-4 py-3 text-right font-medium">
-                  <button className="inline-flex items-center gap-1 hover:text-slate-300" onClick={() => cycle("score")}>
-                    Score <ArrowUpDown className="h-3 w-3" />
-                  </button>
+                  {allSnapshotRows ? (
+                    <span title="Snapshot pools carry no operator score — sorting by score is unavailable">
+                      Score
+                    </span>
+                  ) : (
+                    <button className="inline-flex items-center gap-1 hover:text-slate-300" onClick={() => cycle("score")}>
+                      Score <ArrowUpDown className="h-3 w-3" />
+                    </button>
+                  )}
                 </th>
               </tr>
             </thead>
@@ -291,7 +304,9 @@ export function Graveyard({
                               : "text-slate-400",
                         )}
                       >
-                        {p.score.toFixed(2)}
+                        {/* Audit finding 5.13: snapshot rows render the honest
+                            unavailable placeholder — never a numeric 0.00. */}
+                        {formatScoreCell(p.score, p.snapshotMeta !== undefined)}
                       </span>
                     </td>
                   </tr>
@@ -556,13 +571,6 @@ function PoolSheet({
   onClose: () => void;
 }) {
   const now = useNow();
-  const criteria = useMemo(
-    () =>
-      pool.snapshotCriteria
-        ? snapshotCriteriaOf(pool, now ?? Date.now(), snapshot)
-        : criteriaOf(pool, now ?? Date.now(), null),
-    [pool, now, snapshot],
-  );
   const [lpPct, setLpPct] = useState([100]);
   const [slippageOverride, setSlippageOverride] = useState<number>(300);
 
@@ -595,6 +603,32 @@ function PoolSheet({
     setSlippageOverride((prev) => Math.min(prev, slippageMax));
   }, [slippageMax]);
 
+  /* Audit finding 5.10: criteria thresholds are derived from the LIVE
+   * scanner ProtocolConfig when it is readable (the same P4.5 rule the
+   * estimator follows); when it is not, criteriaOf falls back to the
+   * canonical spec defaults (fail-safe — never a NaN compare). */
+  const liveCriteriaThresholds = useMemo(() => {
+    const cfg = pulse?.scanner.config;
+    if (!cfg) return undefined;
+    try {
+      return {
+        inactivitySeconds: Number(cfg.inactivitySeconds),
+        priceCollapseBps: cfg.priceCollapseBps,
+        minTvlLamports: BigInt(cfg.minTvlLamports),
+        lpBurnDustThreshold: BigInt(cfg.lpBurnDustThreshold),
+      } as const;
+    } catch {
+      return undefined; // malformed config values → canonical defaults
+    }
+  }, [pulse]);
+  const criteria = useMemo(
+    () =>
+      pool.snapshotCriteria
+        ? snapshotCriteriaOf(pool, now ?? Date.now(), snapshot)
+        : criteriaOf(pool, now ?? Date.now(), null, liveCriteriaThresholds),
+    [pool, now, snapshot, liveCriteriaThresholds],
+  );
+
   /* Read-only re-evaluation (P4.5): the Evaluate action runs the console's
    * evaluation at click time and timestamps the result — a real event, not
    * a fabricated "queued" toast. */
@@ -606,8 +640,8 @@ function PoolSheet({
         ? []
         : pool.snapshotCriteria
           ? snapshotCriteriaOf(pool, evalAt, snapshot)
-          : criteriaOf(pool, evalAt, null),
-    [evalAt, pool, snapshot],
+          : criteriaOf(pool, evalAt, null, liveCriteriaThresholds),
+    [evalAt, pool, snapshot, liveCriteriaThresholds],
   );
   const openEvaluate = useCallback(() => {
     setEvalAt(Date.now());
@@ -621,15 +655,10 @@ function PoolSheet({
     const quoteOut = pool.quoteReserveLamports;
     const quoteIn = pool.baseReserve;
     return estimateSalvageEconomics({
-      pool: {
-        coinReserve: pool.baseReserve,
-        pcReserve: pool.quoteReserveLamports,
-        lpSupply: BigInt(pool.lpSupply),
-        // Oriented per the 7019 guard: quote side is WSOL.
-        coinMint: pool.baseSymbol,
-        pcMint: WSOL_MINT,
-        wsolMint: WSOL_MINT,
-      },
+      // Audit finding 5.11: orientation inputs are REAL mint identities from
+      // the snapshot (estimatorPoolInputs) — the shortened display label in
+      // baseSymbol never reaches the 7019 guard.
+      pool: estimatorPoolInputs(pool),
       quoteInAmount: quoteIn,
       quoteOutLamports: quoteOut,
       salvorLpAmount: BigInt(Math.max(1, Math.floor((pool.lpSupply * lpPct[0]) / 100))),

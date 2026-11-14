@@ -9,9 +9,12 @@ import { describe, test, expect } from "bun:test";
 
 import {
   estimateSalvageEconomics,
+  estimatorPoolInputs,
   WSOL_MINT,
   type EstimatorPoolInputs,
 } from "../estimator";
+import { SNAPSHOT, poolFromSnapshot } from "../snapshot";
+import type { Pool } from "../types";
 
 // A healthy derelict fixture: 10M LP supply; salvor burns 1M (10%).
 const POOL: EstimatorPoolInputs = {
@@ -151,5 +154,109 @@ describe("estimateSalvageEconomics (console port)", () => {
 
   test("rejects: empty route quote when the memecoin leg exists", () => {
     expect(run({ quoteInAmount: 0n, quoteOutLamports: 0n }).status).toBe("reject");
+  });
+});
+
+/* ── Estimator orientation from real mints (audit finding 5.11) ─────────
+ * The 7019 orientation guard compares mint identities. A row's baseSymbol
+ * is a shortened DISPLAY label; the production wiring (estimatorPoolInputs)
+ * must feed the guard real snapshot mints so that no display string —
+ * whatever it contains — can influence orientation or economics. */
+describe("estimatorPoolInputs — display labels cannot affect orientation (audit finding 5.11)", () => {
+  const WSOL = WSOL_MINT;
+
+  test("snapshot rows carry real mints: coinMint is the memecoin in BOTH orientations", () => {
+    for (const p of SNAPSHOT.pools) {
+      const pool = poolFromSnapshot(p, SNAPSHOT);
+      const inputs = estimatorPoolInputs(pool);
+      expect(inputs.coinMint).toBe(p.wsolSide.memecoinMint);
+      expect(inputs.coinMint).not.toBe(WSOL);
+      expect(inputs.pcMint).toBe(WSOL);
+      expect(inputs.wsolMint).toBe(WSOL);
+      // Reserves unchanged: coin=memecoin side, pc=WSOL side.
+      expect(inputs.coinReserve).toBe(BigInt(p.memecoinReserveRaw));
+      expect(inputs.pcReserve).toBe(BigInt(p.wsolReserveLamports));
+    }
+  });
+
+  test("adversarial display labels cannot flip orientation or change the estimate", () => {
+    const p = SNAPSHOT.pools.find((x) => x.wsolSide.coinIsWsol)!;
+    const pool = poolFromSnapshot(p, SNAPSHOT);
+    const honest = estimateSalvageEconomics({
+      pool: estimatorPoolInputs(pool),
+      quoteInAmount: 1_000_000n,
+      quoteOutLamports: 4_000_000_000n,
+      salvorLpAmount: 1_000_000n,
+      config: CONFIG,
+      costs: COSTS_ZERO,
+      minNetProfitLamports: 0n,
+    });
+    // Poison the display label with every string that could confuse an
+    // identity comparison — including the WSOL mint itself and a label that
+    // embeds it — then re-derive the inputs.
+    for (const poison of [WSOL, "WSOL", `mint:${WSOL}`, "mint:So11…1112", ""]) {
+      const mislabeled = { ...pool, baseSymbol: poison };
+      const inputs = estimatorPoolInputs(mislabeled);
+      expect(inputs.coinMint).toBe(p.wsolSide.memecoinMint);
+      expect(inputs.coinMint).not.toBe(WSOL);
+      const est = estimateSalvageEconomics({
+        pool: inputs,
+        quoteInAmount: 1_000_000n,
+        quoteOutLamports: 4_000_000_000n,
+        salvorLpAmount: 1_000_000n,
+        config: CONFIG,
+        costs: COSTS_ZERO,
+        minNetProfitLamports: 0n,
+      });
+      // Identical economics — the label never touched the calculation.
+      expect(est).toEqual(honest);
+    }
+  });
+
+  test("orientation resolves identically for coinIsWsol true and false at equal reserves", () => {
+    const coin = SNAPSHOT.pools.find((x) => x.wsolSide.coinIsWsol)!;
+    const pc = SNAPSHOT.pools.find((x) => !x.wsolSide.coinIsWsol)!;
+    const a = estimatorPoolInputs(poolFromSnapshot(coin, SNAPSHOT));
+    const b = estimatorPoolInputs(poolFromSnapshot(pc, SNAPSHOT));
+    expect(a.coinMint).not.toBe(WSOL);
+    expect(b.coinMint).not.toBe(WSOL);
+    expect(a.pcMint).toBe(WSOL);
+    expect(b.pcMint).toBe(WSOL);
+  });
+
+  test("fixture rows without snapshot mints keep the symbol passthrough (display-only rows)", () => {
+    const fixturePool: Pool = {
+      address: "POOL1111111111111111111111111111111111111111",
+      baseSymbol: "MEME",
+      quoteSymbol: "WSOL",
+      amm: "Raydium V4",
+      quoteReserveLamports: 5_000_000_000n,
+      baseReserve: 1_000_000n,
+      baseDecimals: 6,
+      lpSupply: 10_000_000,
+      lastSwapUnix: 1_800_000_000,
+      collapseBps: 9_900,
+      lpBurned: false,
+      lpLocked: false,
+      state: "discovered",
+      score: 0.5,
+      anchorEpoch: null,
+      certExpiresAt: null,
+    };
+    const inputs = estimatorPoolInputs(fixturePool);
+    expect(inputs.coinMint).toBe("MEME");
+    expect(inputs.pcMint).toBe(WSOL);
+    // The guard still resolves exactly one WSOL side.
+    const est = estimateSalvageEconomics({
+      pool: inputs,
+      quoteInAmount: 1_000_000n,
+      quoteOutLamports: 4_000_000_000n,
+      salvorLpAmount: 1_000_000n,
+      config: CONFIG,
+      costs: COSTS_ZERO,
+      minNetProfitLamports: 0n,
+    });
+    expect(est.status).toBe("ok");
+    expect(est.grossProceedsWsolLamports).toBe(900_000_000n);
   });
 });

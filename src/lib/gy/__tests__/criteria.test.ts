@@ -103,3 +103,116 @@ describe("criteriaOf", () => {
     ).toBe("pending");
   });
 });
+
+/* ── Fail-closed activity evidence (audit finding 5.10) ─────────────────
+ * The canonical on-chain evaluator never sees a zero last-swap timestamp —
+ * the oracle attestation gate rejects it (scanner error 6028). The console
+ * criteriaOf must honor the same invariant: missing/unavailable activity
+ * evidence can never establish inactivity, so C1 fails CLOSED to "pending"
+ * instead of computing a huge elapsed value from a zero timestamp. */
+describe("criteriaOf — unavailable activity evidence never passes C1 (audit finding 5.10)", () => {
+  test("lastSwapUnix = 0 is 'unavailable', never a 20,000-day pass", () => {
+    const c1 = criteriaOf(pool({ lastSwapUnix: 0 }), NOW, NOW_EPOCH).find((c) => c.id === "C1")!;
+    expect(c1.state).toBe("pending");
+    expect(c1.value).toBe("unavailable");
+    // The elapsed value is never fabricated from the zero timestamp.
+    expect(c1.value).not.toContain("days");
+  });
+
+  test("negative timestamps are equally unavailable", () => {
+    const c1 = criteriaOf(pool({ lastSwapUnix: -42 }), NOW, NOW_EPOCH).find((c) => c.id === "C1")!;
+    expect(c1.state).toBe("pending");
+    expect(c1.value).toBe("unavailable");
+  });
+
+  test("non-finite timestamps (NaN / Infinity) are unavailable", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const c1 = criteriaOf(pool({ lastSwapUnix: bad }), NOW, NOW_EPOCH).find((c) => c.id === "C1")!;
+      expect(c1.state).toBe("pending");
+      expect(c1.value).toBe("unavailable");
+    }
+  });
+
+  test("valid recent activity still fails C1 — the guard never manufactures passes OR fails", () => {
+    const c1 = criteriaOf(pool({ lastSwapUnix: Math.floor((NOW - 1 * DAY) / 1000) }), NOW, NOW_EPOCH).find(
+      (c) => c.id === "C1",
+    )!;
+    expect(c1.state).toBe("fail");
+    expect(c1.value).toBe("1 days");
+  });
+
+  test("boundary: exactly at the threshold passes; one second under fails (integer-exact)", () => {
+    const threshold = 90 * DAY / 1000; // 7,776,000 s
+    const pass = criteriaOf(pool({ lastSwapUnix: Math.floor(NOW / 1000) - threshold }), NOW, NOW_EPOCH).find(
+      (c) => c.id === "C1",
+    )!;
+    expect(pass.state).toBe("pass");
+    const fail = criteriaOf(pool({ lastSwapUnix: Math.floor(NOW / 1000) - threshold + 1 }), NOW, NOW_EPOCH).find(
+      (c) => c.id === "C1",
+    )!;
+    expect(fail.state).toBe("fail");
+  });
+
+  test("thresholds derived from live config change the C1 boundary; broken values fall back to defaults", () => {
+    // Live config: 1-hour inactivity (3600 s) — a 2-hour-old swap passes.
+    const twoHoursAgo = Math.floor(NOW / 1000) - 7_200;
+    const live = criteriaOf(pool({ lastSwapUnix: twoHoursAgo }), NOW, NOW_EPOCH, {
+      inactivitySeconds: 3_600,
+    }).find((c) => c.id === "C1")!;
+    expect(live.state).toBe("pass");
+    expect(live.threshold).toBe("≥ 0 days"); // 3600 s is sub-day; floor is honest
+    // Default (no override): the same swap is 90-day-stale-fail... no — it
+    // FAILS because 2 hours < 90 days.
+    const def = criteriaOf(pool({ lastSwapUnix: twoHoursAgo }), NOW, NOW_EPOCH).find((c) => c.id === "C1")!;
+    expect(def.state).toBe("fail");
+    // Broken overrides (NaN / 0 / negative / non-finite) never poison the
+    // comparison — they fall back to the canonical 90-day default.
+    for (const broken of [Number.NaN, 0, -5, Number.POSITIVE_INFINITY]) {
+      const c1 = criteriaOf(pool({ lastSwapUnix: twoHoursAgo }), NOW, NOW_EPOCH, {
+        inactivitySeconds: broken,
+      }).find((c) => c.id === "C1")!;
+      expect(c1.state).toBe("fail");
+      expect(c1.threshold).toBe("≥ 90 days");
+    }
+  });
+
+  test("C3/C6 thresholds honor live config values with fail-safe fallbacks", () => {
+    // C3 with a live 1-SOL floor: 0.6 SOL fails (passes at the 0.5 default).
+    expect(
+      criteriaOf(pool({ quoteReserveLamports: 600_000_000n }), NOW, NOW_EPOCH, { minTvlLamports: 1_000_000_000n }).find(
+        (c) => c.id === "C3",
+      )!.state,
+    ).toBe("fail");
+    expect(
+      criteriaOf(pool({ quoteReserveLamports: 600_000_000n }), NOW, NOW_EPOCH, { minTvlLamports: 0 }).find(
+        (c) => c.id === "C3",
+      )!.state,
+    ).toBe("pass"); // broken override → canonical 0.5 SOL default
+    // C6 with MIN_EPOCH_CONFIRMATION = 3: gap 2 is pending, gap 3 passes.
+    expect(
+      criteriaOf(pool({ anchorEpoch: NOW_EPOCH - 2 }), NOW, NOW_EPOCH, { minEpochConfirmation: 3 }).find(
+        (c) => c.id === "C6",
+      )!.state,
+    ).toBe("pending");
+    expect(
+      criteriaOf(pool({ anchorEpoch: NOW_EPOCH - 3 }), NOW, NOW_EPOCH, { minEpochConfirmation: 3 }).find(
+        (c) => c.id === "C6",
+      )!.state,
+    ).toBe("pass");
+  });
+
+  test("C4 semantics verified against the canonical evaluator (supply > dust_threshold, strict)", () => {
+    // Canonical: criteria.rs — require!(lp_supply > thresholds.lp_burn_dust_threshold)
+    // with ProtocolConfig lp_burn_dust_threshold default 1,000 (strict >).
+    // The console models C4 via the lpBurned placeholder for fixture rows and
+    // pins C4 "pending" upstream for snapshot rows (snapshotCriteriaOf); the
+    // DISPLAYED threshold tracks the live config value without changing the
+    // boolean state semantics.
+    const c4 = criteriaOf(pool(), NOW, NOW_EPOCH, { lpBurnDustThreshold: 7_000n }).find((c) => c.id === "C4")!;
+    expect(c4.threshold).toBe("supply > 7,000 LP");
+    expect(c4.state).toBe("pass"); // lpBurned: false (boolean model unchanged)
+    expect(criteriaOf(pool({ lpBurned: true }), NOW, NOW_EPOCH).find((c) => c.id === "C4")!.state).toBe("fail");
+    // Default text still matches the canonical 1,000 default.
+    expect(criteriaOf(pool(), NOW, NOW_EPOCH).find((c) => c.id === "C4")!.threshold).toBe("supply > 1,000 LP");
+  });
+});
