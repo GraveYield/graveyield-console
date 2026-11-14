@@ -10,8 +10,9 @@
 | **Phase** | 2 — Audit-driven corrections (per the audit report `GraveYield-Console-Audit-Report.md`, verdict PARTIALLY ALIGNED) |
 | **Work performed** | A1–A6 (Phase A), B1–B2 (Phase B), Section-4 lifecycle technical design (design only) |
 | **Verification** | 322/322 tests pass (277 baseline + 45 new), typecheck, ESLint, production build, dependency audit, SDK integrity pins — all green |
-| **Delivery** | Code: **uncommitted working-tree edits** in the local audit clone (listed in §B) — no code commits, branches, or deployments. Docs: this report and `docs/lifecycle-integration-design.md` delivered to the repository as **docs-only PR #12** (head `docs/phase2-implementation-report`), per owner instruction of 2026-11-14. |
+| **Delivery** | Docs: this report and `docs/lifecycle-integration-design.md` delivered as a documentation PR per owner instruction of 2026-11-14 — r1 was PR #12, whose head branch was then frozen by the repository ruleset added the same day; the successor docs PR carries r1–r3. Code: the eight corrections (§B) delivered as **implementation PR #13** (branch `fix/phase2-audit-corrections`, 17 files, +1126/−89, full verification suite re-run green on that branch). Nothing merged, nothing deployed. |
 | **Revision r2** | 2026-11-14, per the PR #12 review: corrected the PR-number reference (r1 said #11; the actual PR is #12 — #11 was consumed by a since-deleted item and GitHub never reuses numbers); §D and `docs/lifecycle-integration-design.md` updated to the reviewed lifecycle model — per-account `present / absent / unavailable` read results (absence vs failure distinguished by construction), a normative ordered state-transition table with mutually exclusive states, `certification-ready` renamed to `re-evaluation-window-reached` (asserts the window, never an outcome), and ownership mismatch degraded to `unavailable`, never apparent absence. |
+| **Revision r3** | 2026-11-14: delivery status updated — the code corrections are now delivered as implementation PR #13 (replacing the r1/r2 “uncommitted working-tree edits” wording); the documentation moved to a successor PR because the new “changes must be made through a pull request” repository ruleset blocks updates to PR #12’s head branch. |
 
 ---
 
@@ -183,8 +184,8 @@ Also **not** done (Section 6/7 restrictions): no fixture-to-live substitution, n
 ## D. Lifecycle technical design (design only — NOT implemented)
 
 Per Section 4 of the authorization, the complete design is delivered as
-**`docs/lifecycle-integration-design.md`** (included in the docs-only delivery PR #12; the code
-changes themselves remain uncommitted working-tree edits — see the Delivery note in the header).
+**`docs/lifecycle-integration-design.md`** (included in the documentation PR; the code corrections
+are delivered separately as implementation PR #13 — see the Delivery note in the header).
 It addresses all fifteen required points and explicitly covers the additional
 states. Summary of the design's decisions (full detail, derivation table, failure matrix, and
 test plan in the document):
@@ -268,4 +269,4 @@ Each item from the Phase-2 preservation list, with the evidence that it remains 
 - **What still stands between the console and full alignment:** the lifecycle (5.2/5.8) — designed (§D), not implemented, pending O4; the indexer evidence-status vocabulary (5.6/O3), cross-repo and owner-gated; the NS-3 deployment-status reconciliation (5.12/O2); the O7 dust-reference correction (verified, awaiting approval); and the O1/O5 documentation decisions.
 - **Per the mandate:** no claim of full alignment is made on the strength of passing tests alone, and no Mainnet-readiness claim is made. The repository is positioned for an ALIGNED verdict at the next audit once the O4-approved lifecycle implementation and the owner-gated items above land.
 
-**Implementation stops here. The code change set remains uncommitted in the local audit working tree — complete, verified, and reversible; no code has been committed, pushed, merged, or deployed. Only this report and the design document are delivered, as docs-only PR #12, per owner instruction.**
+**Implementation stops here. The documentation (this report + the design document) is delivered as the documentation PR, and the eight code corrections (§B) are delivered as implementation PR #13 with the full verification suite re-run green on that branch. Nothing has been merged or deployed, and no lifecycle code has been implemented (pending O4).**
