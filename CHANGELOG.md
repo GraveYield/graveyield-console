@@ -5,6 +5,10 @@ Commit identity convention: all GraveYield engineering commits are authored as s
 
 ## [Unreleased]
 
+### Dependency audit refresh — 2026-11-21 (CI gate restoration)
+
+`bun audit` went red on every branch (main included) after seven moderate Next.js advisories were published on 2026-11-19/20 against the whole `>= 16.3.0 <= 16.4.4` range — the repo pins the audit gate as "must stay at zero findings", so this is the minimal merge-restoring refresh: `next` `^16.4.3` → `^16.4.6` (patch-level, inside the existing semver range; lockfile + one manifest line, no API/config surface touched). The advisories cover root-param information disclosure via `unstable_cache()`/`use cache`, cache poisoning of shared fallback shells, SVG rejection bypass in image optimization, HttpOnly cookie exposure on Edge runtime routes, and cross-client response injection in self-hosted response forwarding — none are exploitable through this console's contract surface (no `use cache`/`unstable_cache` usage, no image-optimization intake of remote SVG), but the gate is zero-findings by policy, not by exploitability. Verified after refresh: `bun audit` zero findings, tsc clean, eslint clean, bun test 307/307, `next build` green.
+
 ### Snapshot contract v2 adoption — 2026-11-21 (D-01 M1-sourcing extension, strict v2-only)
 
 The console now consumes the grave-indexer **ConsoleSnapshot schemaVersion 2** artifact — the D-01 WSOL quote-side sourcing extension shipped in grave-indexer PR #4. This unblocks that PR's merge: previously the console pinned `schemaVersion === 1`, so every v2 artifact was classified `corrupt` (the gap was explicitly recorded in the indexer's normative reader header as an unresolved downstream dependency).
