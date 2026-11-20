@@ -1,6 +1,6 @@
 # Snapshot artifact transport (P4.1 Step 1)
 
-How the console obtains the grave-indexer `ConsoleSnapshotV1` artifact at
+How the console obtains the grave-indexer `ConsoleSnapshotV2` artifact at
 runtime, what can go wrong, and why a stale or invalid artifact can never be
 presented as fresh data.
 
@@ -62,7 +62,7 @@ Envelope shape (v1):
   "checkedAtUnixMs": 1793400000000,
   "ageMs": 60000,
   "maxAgeMs": 86400000,
-  "snapshot": { "schemaVersion": 1, "generatedAtUnixMs": 1793399940000, "...": "ConsoleSnapshotV1" }
+  "snapshot": { "schemaVersion": 2, "generatedAtUnixMs": 1793399940000, "...": "ConsoleSnapshotV2" }
 }
 ```
 
