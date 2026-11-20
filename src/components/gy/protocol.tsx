@@ -38,7 +38,13 @@ export interface IndexerHealthSummary {
   maxAgeMs: number | null;
   cluster: string | null;
   indexerGitHead: string | null;
-  counts: { rawAccounts: number; parsedPools: number; supportedWsolPairs: number; enriched: number } | null;
+  counts: {
+    rawAccounts: number;
+    parsedPools: number;
+    supportedWsolPairs: number;
+    m1SourcingRejected: number;
+    enriched: number;
+  } | null;
   failures: { stage: string; pool?: string; reason: string }[];
   reason: string | null;
   sourceKind: string;
@@ -403,6 +409,7 @@ export function Protocol({ snapshotHealth }: { snapshotHealth: IndexerHealthSumm
                   <MiniStat label="raw accounts" value={snapshotHealth.counts.rawAccounts.toLocaleString()} />
                   <MiniStat label="parsed pools" value={snapshotHealth.counts.parsedPools.toLocaleString()} />
                   <MiniStat label="supported WSOL pairs" value={snapshotHealth.counts.supportedWsolPairs.toLocaleString()} />
+                  <MiniStat label="M1 sourcing rejected" value={snapshotHealth.counts.m1SourcingRejected.toLocaleString()} />
                   <MiniStat label="enriched" value={snapshotHealth.counts.enriched.toLocaleString()} />
                 </div>
               )}

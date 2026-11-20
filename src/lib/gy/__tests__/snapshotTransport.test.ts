@@ -255,10 +255,15 @@ describe("snapshotSource — fail-closed contract gate", () => {
     expectUnavailable(p, "corrupt", "PARSE_FAILED");
   });
 
-  test("wrong schemaVersion → corrupt / PARSE_FAILED", () => {
-    const bad = { ...artifactJson(NOW - 60_000), schemaVersion: 2 };
-    const p = bytesToPayload(new TextEncoder().encode(JSON.stringify(bad)), { nowMs: NOW, checkedAtUnixMs: NOW, source: src });
-    expectUnavailable(p, "corrupt", "PARSE_FAILED");
+  test("wrong schemaVersion (v1 payload and future version) → corrupt / PARSE_FAILED", () => {
+    // A v1 payload must be rejected, never reinterpreted as v2.
+    const v1 = { ...artifactJson(NOW - 60_000), schemaVersion: 1 };
+    const p1 = bytesToPayload(new TextEncoder().encode(JSON.stringify(v1)), { nowMs: NOW, checkedAtUnixMs: NOW, source: src });
+    expectUnavailable(p1, "corrupt", "PARSE_FAILED");
+    // A future version is rejected too.
+    const future = { ...artifactJson(NOW - 60_000), schemaVersion: 9 };
+    const p9 = bytesToPayload(new TextEncoder().encode(JSON.stringify(future)), { nowMs: NOW, checkedAtUnixMs: NOW, source: src });
+    expectUnavailable(p9, "corrupt", "PARSE_FAILED");
   });
 
   test("fabricated eligibility (C4 evaluated upstream) → corrupt — fabrication cannot ride the transport", () => {
