@@ -13,7 +13,11 @@
 // `refs/tags/console-snapshot-prod` (NOT GitHub's repository-wide "latest"
 // release). The ref points to an ANNOTATED tag object whose message is the
 // stable-pointer JSON (graveyield.console-snapshot-stable-pointer.v1). The
-// pointer IDENTIFIES one immutable `--latest=false` versioned release and
+// pointer IDENTIFIES one workflow-protected `--latest=false` versioned
+// release — protected by the publisher workflow's `--latest=false`
+// convention plus the digest verification below, NOT by GitHub's
+// immutable-releases feature (a separate, owner-enabled platform setting
+// whose enablement must be verified independently) — and
 // carries per-asset SHA-256 digests + byte lengths. The payload bytes live
 // exclusively on the versioned release assets; the stable ref never carries
 // them.
