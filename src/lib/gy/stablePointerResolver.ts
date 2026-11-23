@@ -130,6 +130,25 @@ function isAbort(e: unknown): boolean {
   return e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError");
 }
 
+/**
+ * Await a body cancellation and swallow any rejection from it.
+ *
+ * Cancellation is AWAITED so the response cleanup completes before the
+ * typed transport failure propagates; but a hostile or already-errored
+ * stream may reject `cancel()` itself, and that rejection must never mask
+ * the typed failure the resolver is about to throw. Pass an already-started
+ * promise (`stream.cancel()` or `reader.cancel()`); undefined (no body)
+ * is a no-op.
+ */
+async function cancelQuietly(cancelPromise: Promise<unknown> | undefined): Promise<void> {
+  if (!cancelPromise) return;
+  try {
+    await cancelPromise;
+  } catch {
+    // best-effort cleanup — never overrides the typed transport failure
+  }
+}
+
 /** Reject a stable-ref name that could escape the ref namespace or the URL path. */
 function assertSafeRefName(ref: string): void {
   if (!/^[A-Za-z0-9._/-]{1,200}$/.test(ref) || ref.startsWith("/") || ref.endsWith("/") || ref.includes("..")) {
@@ -237,7 +256,11 @@ export async function resolveSnapshotViaStablePointer(
         if (value) {
           total += value.byteLength;
           if (total > capBytes) {
-            void reader.cancel(); // stop consuming — do not buffer the excess
+            // Stop consuming immediately and AWAIT the cancellation: the
+            // response is dropped before the typed failure propagates, and
+            // a rejection from a hostile stream's cancel() is swallowed by
+            // cancelQuietly — it must never mask the typed OVERSIZE failure.
+            await cancelQuietly(reader.cancel());
             throw oversized(total);
           }
           chunks.push(value);
@@ -283,6 +306,9 @@ export async function resolveSnapshotViaStablePointer(
     const declared = res.headers.get("content-length");
     const declaredLen = declared === null ? null : Number(declared);
     if (declaredLen !== null && Number.isFinite(declaredLen) && declaredLen > maxJsonBytes) {
+      // The unconsumed body is cancelled BEFORE the typed failure propagates,
+      // so the connection is released instead of left dangling.
+      await cancelQuietly(res.body?.cancel());
       throw unavailable(
         "corrupt",
         "OVERSIZE",
@@ -339,6 +365,9 @@ export async function resolveSnapshotViaStablePointer(
     const contentLength = res.headers.get("content-length");
     const declared = contentLength === null ? null : Number(contentLength);
     if (declared !== null && Number.isFinite(declared) && declared > maxBytes) {
+      // Same cleanup discipline as the JSON path: drop the unconsumed body
+      // before the typed failure propagates.
+      await cancelQuietly(res.body?.cancel());
       throw unavailable("corrupt", "OVERSIZE", "asset-fetch", `${assetName} declares ${declared} bytes — over the ${maxBytes}-byte transport cap`);
     }
     // Same bounded-read discipline as the JSON path: cap enforced during
