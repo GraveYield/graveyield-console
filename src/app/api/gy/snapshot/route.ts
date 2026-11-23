@@ -13,7 +13,8 @@
 // docs/snapshot-stable-pointer.md):
 //   - GY_SNAPSHOT_GITHUB_REPO: the production stable-pointer resolver —
 //     dedicated ref refs/tags/console-snapshot-prod → annotated tag object
-//     (stable-pointer JSON) → immutable --latest=false versioned release
+//     (stable-pointer JSON) → workflow-protected --latest=false versioned
+//     release (publisher-convention immutability, NOT GitHub-enforced)
 //     assets, every byte verified against the pointer digests (P4.1 Step 2)
 //   - GY_SNAPSHOT_URL (LEGACY direct-URL store): still supported for local
 //     development and self-hosted runs; NOT the production path under the

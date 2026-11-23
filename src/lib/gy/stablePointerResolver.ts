@@ -6,7 +6,10 @@
 // refs/tags/console-snapshot-prod — NOT the repository-wide "latest"
 // release. Its annotated tag object's message is the stable-pointer JSON
 // (graveyield.console-snapshot-stable-pointer.v1), which identifies ONE
-// immutable --latest=false versioned release and carries per-asset SHA-256
+// workflow-protected --latest=false versioned release (immutability by
+// publisher-workflow convention + digest verification — NOT assumed to be a
+// GitHub-enforced immutable release, which is a separate owner-enabled
+// platform setting) and carries per-asset SHA-256
 // digests + byte lengths. Resolution sequence (fail-closed at every step):
 //
 //   1. GET /repos/{repo}/git/ref/tags/{stableRef}      → tag-object sha
@@ -33,6 +36,12 @@
 // chain, so a partially verified or corrupted artifact can never be
 // served from a cache. Stale (past-freshness-budget) artifacts are served
 // but flagged exactly like the legacy source — never presented as fresh.
+//
+// Every upstream response is consumed under a documented byte cap
+// (DEFAULT_MAX_JSON_BYTES for API JSON, maxBytes for release assets):
+// the body is streamed and byte-counted BEFORE any parsing, an oversized
+// body is cancelled and rejected with a typed OVERSIZE failure — never
+// silently truncated and parsed.
 //
 // Server-side only (node:crypto + fetch). The optional GitHub token is
 // read from the environment by the route layer, never logged, and never
@@ -80,12 +89,37 @@ export interface StablePointerResolverDeps {
   fetchImpl: typeof fetch;
   /** Hard cap per fetched asset (default 8 MiB — the artifact is ~15 KB today). */
   maxBytes?: number;
+  /**
+   * Hard cap per GitHub API JSON response (default DEFAULT_MAX_JSON_BYTES).
+   * Enforced during the streamed read, BEFORE JSON parsing.
+   */
+  maxJsonBytes?: number;
   /** Per-request timeout (default 10 s). */
   fetchTimeoutMs?: number;
 }
 
 /** Human-readable stage names surfaced in the transport envelope's `reason` text. */
 const STABLE_POINTER_SOURCE_KIND: SnapshotSourceKind = "stable-pointer";
+
+/**
+ * Hard cap for a single GitHub API JSON response consumed by this resolver.
+ *
+ * Choice rationale (documented, not arbitrary): the ONLY JSON documents the
+ * resolver ever consumes are the git-ref lookup
+ * (`GET /repos/{repo}/git/ref/tags/{ref}`) and the annotated tag object
+ * (`GET /repos/{repo}/git/tags/{sha}`). The pointer message inside the tag
+ * object is a strict ten-key JSON document (< 1 KB in practice, and
+ * parseStablePointer rejects anything larger on shape alone), so legitimate
+ * bodies for these two endpoints sit in the low-KB range. 1 MiB is therefore
+ * ~1000× headroom over the largest legitimate response — small enough to
+ * bound memory consumption against a hostile or misbehaving upstream, large
+ * enough that no legitimate GitHub API answer for these endpoints is ever
+ * refused. The cap is enforced DURING the streamed read (byte-counted per
+ * chunk) BEFORE any JSON parsing: an oversized body is cancelled and
+ * rejected with a typed OVERSIZE failure — it is NEVER silently truncated
+ * and parsed as partial JSON.
+ */
+export const DEFAULT_MAX_JSON_BYTES = 1024 * 1024; // 1 MiB
 
 function errText(e: unknown): string {
   if (e instanceof Error) return `${e.name}: ${e.message}`;
@@ -116,6 +150,7 @@ export async function resolveSnapshotViaStablePointer(
 ): Promise<SnapshotTransportPayload> {
   const nowMs = deps.nowMs;
   const maxBytes = deps.maxBytes ?? DEFAULT_MAX_ARTIFACT_BYTES;
+  const maxJsonBytes = deps.maxJsonBytes ?? DEFAULT_MAX_JSON_BYTES;
   const timeoutMs = deps.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
   const checkedAtUnixMs = nowMs;
 
@@ -177,6 +212,50 @@ export async function resolveSnapshotViaStablePointer(
     ...(token ? { authorization: `Bearer ${token}` } : {}),
   };
 
+  /**
+   * Stream-read a response body under a hard byte cap. The cap is enforced
+   * DURING the read (byte-counted per chunk), BEFORE any parsing: a body
+   * that exceeds the cap is cancelled and a typed failure is thrown. The
+   * helper NEVER returns truncated bytes and NEVER hands a partial body to
+   * a parser — the only two outcomes are the complete bytes (≤ cap) or a
+   * typed transport failure.
+   */
+  async function readBodyUnderCap(
+    res: Response,
+    capBytes: number,
+    oversized: (readBytes: number) => SnapshotTransportPayload,
+    unreadable: (e: unknown) => SnapshotTransportPayload,
+  ): Promise<Uint8Array> {
+    try {
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("response body is empty");
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          total += value.byteLength;
+          if (total > capBytes) {
+            void reader.cancel(); // stop consuming — do not buffer the excess
+            throw oversized(total);
+          }
+          chunks.push(value);
+        }
+      }
+      const merged = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) {
+        merged.set(c, off);
+        off += c.byteLength;
+      }
+      return merged;
+    } catch (e) {
+      if (isTransportPayload(e)) throw e; // typed OVERSIZE failure — rethrow verbatim
+      throw unreadable(e);
+    }
+  }
+
   /** JSON GET against the GitHub API; typed transport failure on any non-OK status or network fault. */
   async function fetchApiJson(url: string, stage: SnapshotResolverStage): Promise<{ status: number; json: unknown }> {
     let res: Response;
@@ -198,8 +277,33 @@ export async function resolveSnapshotViaStablePointer(
         : `GitHub API answered HTTP ${res.status}`;
       throw unavailable("missing", "FETCH_HTTP_STATUS", stage, `${detail} for ${new URL(url).pathname}`);
     }
+    // Bounded read: cap the body DURING the streamed read, BEFORE parsing —
+    // an oversized response is a typed corrupt/OVERSIZE failure at this
+    // stage; it is never truncated and never partially parsed.
+    const declared = res.headers.get("content-length");
+    const declaredLen = declared === null ? null : Number(declared);
+    if (declaredLen !== null && Number.isFinite(declaredLen) && declaredLen > maxJsonBytes) {
+      throw unavailable(
+        "corrupt",
+        "OVERSIZE",
+        stage,
+        `GitHub API response declares ${declaredLen} bytes — over the ${maxJsonBytes}-byte JSON response cap`,
+      );
+    }
+    const bytes = await readBodyUnderCap(
+      res,
+      maxJsonBytes,
+      (read) =>
+        unavailable(
+          "corrupt",
+          "OVERSIZE",
+          stage,
+          `GitHub API JSON response exceeded the ${maxJsonBytes}-byte cap after ${read} bytes — refusing to parse a truncated body`,
+        ),
+      (e) => unavailable("missing", "FETCH_FAILED", stage, `GitHub API response body could not be read (${errText(e)})`),
+    );
     try {
-      return { status: res.status, json: await res.json() };
+      return { status: res.status, json: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) };
     } catch (e) {
       throw unavailable("missing", "FETCH_FAILED", stage, `GitHub API response is not valid JSON (${errText(e)})`);
     }
@@ -237,34 +341,26 @@ export async function resolveSnapshotViaStablePointer(
     if (declared !== null && Number.isFinite(declared) && declared > maxBytes) {
       throw unavailable("corrupt", "OVERSIZE", "asset-fetch", `${assetName} declares ${declared} bytes — over the ${maxBytes}-byte transport cap`);
     }
-    try {
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("response body is empty");
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          total += value.byteLength;
-          if (total > maxBytes) {
-            void reader.cancel();
-            throw unavailable("corrupt", "OVERSIZE", "asset-fetch", `${assetName} stream exceeded the ${maxBytes}-byte transport cap`);
-          }
-          chunks.push(value);
-        }
-      }
-      const merged = new Uint8Array(total);
-      let off = 0;
-      for (const c of chunks) {
-        merged.set(c, off);
-        off += c.byteLength;
-      }
-      return merged;
-    } catch (e) {
-      if (isTransportPayload(e)) throw e; // typed OVERSIZE/fetch failure — rethrow verbatim
-      throw unavailable("missing", "FETCH_FAILED", "asset-fetch", `asset body for ${assetName} could not be read (${errText(e)})`);
-    }
+    // Same bounded-read discipline as the JSON path: cap enforced during
+    // the streamed read, before the bytes reach any verifier.
+    return readBodyUnderCap(
+      res,
+      maxBytes,
+      () =>
+        unavailable(
+          "corrupt",
+          "OVERSIZE",
+          "asset-fetch",
+          `${assetName} stream exceeded the ${maxBytes}-byte transport cap`,
+        ),
+      (e) =>
+        unavailable(
+          "missing",
+          "FETCH_FAILED",
+          "asset-fetch",
+          `asset body for ${assetName} could not be read (${errText(e)})`,
+        ),
+    );
   }
 
   try {

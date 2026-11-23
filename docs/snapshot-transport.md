@@ -101,9 +101,9 @@ contract, plus the envelope-consistency checks.
   data, the age against the budget.
 - Operators refresh the *data* by publishing a new artifact (URL topology)
   or letting the indexer regenerate the file (path topology), then pressing
-  Refresh. Either `stable-latest` URLs/keys or fully versioned immutable
-  artifacts work — the staleness badge is computed from the artifact's own
-  timestamps either way.
+  Refresh. Either `stable-latest` URLs/keys or fully versioned
+  workflow-protected artifacts work — the staleness badge is computed from
+  the artifact's own timestamps either way.
 
 ## Operator runbook
 

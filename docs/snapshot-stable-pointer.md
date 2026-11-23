@@ -12,9 +12,9 @@ reference architecture** (`grave-indexer docs/SNAPSHOT_PUBLICATION.md`
 The production stable pointer is NOT a URL. It is the dedicated git
 reference `refs/tags/console-snapshot-prod` in `GraveYield/grave-indexer`,
 whose annotated tag object's MESSAGE carries a stable-pointer JSON
-(`graveyield.console-snapshot-stable-pointer.v1`) naming ONE immutable
-`--latest=false` versioned release together with per-asset SHA-256
-digests and byte lengths. There is deliberately no single-GET URL behind
+(`graveyield.console-snapshot-stable-pointer.v1`) naming ONE
+workflow-protected `--latest=false` versioned release together with
+per-asset SHA-256 digests and byte lengths. There is deliberately no single-GET URL behind
 this architecture: the retired repo-wide `releases/latest/download/...`
 URL family is LEGACY, non-production, and cannot enforce pointer digests.
 The Console therefore resolves the chain server-side on every request.
@@ -105,8 +105,44 @@ Exactly one topology may be configured — mixing them is a fail-closed
 - Corrupt artifacts are loud in server logs (`stage=` + `reasonCode`),
   and reason strings carry only stage names and URL paths — never
   credential values.
+- Bounded consumption of every upstream response: the GitHub API JSON
+  responses the resolver reads are capped at a documented maximum
+  (`DEFAULT_MAX_JSON_BYTES`) enforced during the streamed read, BEFORE
+  any JSON parsing — an oversized response is cancelled and rejected
+  with a typed `OVERSIZE` failure, never silently truncated and parsed.
 
-## 6. Testing
+## 6. Terminology — two distinct protections, never conflated
+
+This document deliberately says "workflow-protected versioned release",
+not "immutable release". Those are two different, non-interchangeable
+protections:
+
+- **Workflow-protected versioned release** — what this architecture
+  actually relies on: the publisher workflow's `--latest=false`
+  convention (every publication lands on a fresh versioned release and
+  the pointer names exactly one) PLUS the SHA-256 + byte-length
+  verification the Console performs on every resolution. This guarantees
+  the console never consumes bytes the pointer does not name, but it
+  does NOT prevent a privileged writer from replacing release assets or
+  metadata — in that case digest verification fails loudly and the
+  console serves nothing (fail closed).
+- **GitHub-enforced immutable release** — GitHub's immutable-releases
+  platform feature: once a release is published while the feature is
+  enabled, GitHub locks its assets and its tag. This is an
+  owner-enabled repository setting and is NOT assumed, claimed, or
+  implied anywhere in this architecture.
+
+Whether GitHub-enforced immutable releases are actually enabled on the
+publisher repository is an owner setting that can only be confirmed by
+an authorized read of the documented read-only REST endpoint
+`GET /repos/{owner}/{repo}/immutable-releases` (requires the
+"Administration" repository permission, read; HTTP 200 returns
+`enabled` and `enforced_by_owner`; HTTP 404 means, per the documented
+behavior, that the feature is not enabled for the repository). Until an
+authorized read succeeds, the setting must be treated as UNKNOWN — and
+a permission failure (403) must never be interpreted as "disabled".
+
+## 7. Testing
 
 - `src/lib/gy/__tests__/stablePointer.test.ts` — the 28-case contract
   mirror battery (strict pointer parsing, provenance shape, pointer↔artifact
@@ -118,5 +154,8 @@ Exactly one topology may be configured — mixing them is a fail-closed
   digest/length/checksum/provenance mismatches, malformed JSON,
   schema-v2 rejection, completeness rejections, timeout/network/rate-limit
   typing, versioned-release discipline (never `releases/latest`),
-  stale-flagged serving, and the source dispatcher (conflict, legacy
-  passthrough, unconfigured, unsafe slug).
+  stale-flagged serving, the source dispatcher (conflict, legacy
+  passthrough, unconfigured, unsafe slug), and the bounded-response
+  battery (under-cap accepted, exactly-at-cap boundary, over-cap
+  rejected before pointer parsing, no silent truncation, HTTP-status
+  precedence over body size, custom cap wiring, non-JSON handling).
