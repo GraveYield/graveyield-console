@@ -1,8 +1,9 @@
 // Snapshot artifact TRANSPORT types + client-side hydration (P4.1 Step 1).
 //
 // The /api/gy/snapshot route resolves an indexer artifact from a configured
-// source (GY_SNAPSHOT_URL or GY_SNAPSHOT_PATH) and answers with this
-// envelope. Four artifact states exist and are ALWAYS explicit:
+// source (the stable-pointer resolver, or the legacy GY_SNAPSHOT_URL /
+// GY_SNAPSHOT_PATH sources) and answers with this envelope. Four artifact
+// states exist and are ALWAYS explicit:
 //
 //   valid    — parsed, contract-clean, inside its freshness budget
 //   stale    — parsed, contract-clean, past its freshness budget (data is
@@ -39,7 +40,36 @@ export type TransportReasonCode =
   | "MALFORMED_ENVELOPE";
 
 /** Where the route attempted to load the artifact from. */
-export type SnapshotSourceKind = "path" | "url" | "none";
+export type SnapshotSourceKind = "path" | "url" | "stable-pointer" | "none";
+
+/**
+ * The stable-pointer resolution stage a failure occurred in (null when the
+ * artifact was served or the legacy source topology was used). Diagnostic
+ * only: the four-state envelope and its reason codes stay authoritative.
+ */
+export type SnapshotResolverStage =
+  | "stable-ref"
+  | "annotated-tag"
+  | "pointer-parse"
+  | "pointer-validate"
+  | "asset-fetch"
+  | "asset-integrity"
+  | "completeness"
+  | "snapshot-schema"
+  | "network";
+
+/** Every resolver stage the envelope may carry (pinned by test). */
+export const SNAPSHOT_RESOLVER_STAGES: readonly SnapshotResolverStage[] = [
+  "stable-ref",
+  "annotated-tag",
+  "pointer-parse",
+  "pointer-validate",
+  "asset-fetch",
+  "asset-integrity",
+  "completeness",
+  "snapshot-schema",
+  "network",
+];
 
 /** Transport envelope — the diagnostic half of the response (no payload). */
 export interface SnapshotTransport {
@@ -54,6 +84,12 @@ export interface SnapshotTransport {
   checkedAtUnixMs: number;
   ageMs: number | null;
   maxAgeMs: number | null;
+  /**
+   * Stable-pointer resolver stage of a failure (null otherwise). Additive,
+   * optional diagnostic: the client hydration gate drops fields it does not
+   * know rather than trusting them, so older clients are unaffected.
+   */
+  resolverStage?: SnapshotResolverStage | null;
 }
 
 /** Full route payload: the envelope plus the artifact when one was served. */
@@ -220,7 +256,7 @@ export function hydrateTransportPayload(
   if (reason === undefined) return null;
   const src = json.source;
   if (!isObj(src)) return null;
-  if (src.kind !== "path" && src.kind !== "url" && src.kind !== "none") return null;
+  if (src.kind !== "path" && src.kind !== "url" && src.kind !== "stable-pointer" && src.kind !== "none") return null;
   const uri = src.uri === null ? null : optStr(src.uri);
   if (uri === undefined) return null;
   const ageMs = json.ageMs === null ? null : optFinite(json.ageMs);
