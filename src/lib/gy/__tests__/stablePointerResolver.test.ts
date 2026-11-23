@@ -37,6 +37,10 @@
 //       boundary accepted, over-cap rejected with typed OVERSIZE before the
 //       pointer is resolved, no silent truncation, HTTP-status precedence,
 //       unchanged non-JSON typing, custom cap wiring
+//   27. response cancellation on bounded-read rejection: declared-length
+//       rejection cancels the body (API + asset paths), streamed-overflow
+//       cancellation is awaited, hostile cancel() rejections never mask the
+//       typed failure
 //
 // Mirrors the fixture approach of stablePointer.test.ts: the bytes are
 // derived from the committed producer fixture (src/lib/gy/snapshot.json).
@@ -143,7 +147,7 @@ function validTriple(overrides?: {
   return { snapshotBytes, provenanceBytes, checksumBytes, pointer, pointerJson };
 }
 
-// ─── Mock GitHub transport ───────────────────────────────────────────────────────
+// ─── Mock GitHub transport ─────────────────────────────────────────────────────
 
 interface MockRoute {
   /** URL prefix matched exactly; first match wins. */
@@ -153,6 +157,8 @@ interface MockRoute {
   headers?: Record<string, string>;
   /** When set, fetch rejects with this error instead of answering. */
   throw?: Error;
+  /** When set, fetch answers with this pre-built Response verbatim (raw streams, declared headers). */
+  raw?: Response;
 }
 
 function jsonResponse(body: object | string, status = 200): Response {
@@ -178,6 +184,7 @@ function mockFetch(routes: MockRoute[]) {
     const route = routes.find((r) => url === r.url);
     if (!route) throw new Error(`mock fetch: no route for ${url}`);
     if (route.throw) throw route.throw;
+    if (route.raw) return route.raw;
     if (route.status !== undefined && route.status !== 200) {
       // Non-200 answers may still carry a (potentially large) body — the
       // resolver must classify by STATUS before it ever reads the body.
@@ -721,7 +728,7 @@ describe("source dispatcher", () => {
   });
 });
 
-// ─── 26. Bounded GitHub API JSON responses ──────────────────────────────────
+// ─── 26. Bounded GitHub API JSON responses ──────────────────────────
 //
 // Every test here drives the REAL helper path (streamed byte-counted read →
 // JSON parse → resolver chain) over the mocked transport — none of them
@@ -842,5 +849,158 @@ describe("bounded GitHub API JSON responses", () => {
     const payload = await resolveSnapshotViaStablePointer(env(), deps(impl, { maxJsonBytes: 1024 }));
     expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "annotated-tag" });
     expect(requested.filter((u) => u.includes("/releases/download/")).length).toBe(0);
+  });
+});
+
+// ─── 27. Response cancellation on bounded-read rejection ────────────────────
+//
+// The bounded-read contract promises that oversized responses are CANCELLED,
+// not merely rejected. These tests verify that promise at both rejection
+// sites and through both cancellation mechanisms:
+//
+//   - declared Content-Length over the cap → the (unconsumed) body's
+//     stream.cancel() is awaited before the typed OVERSIZE failure
+//     propagates (API JSON path and release-asset path);
+//   - streamed overflow → reader.cancel() is awaited before the typed
+//     OVERSIZE failure propagates;
+//   - a hostile stream whose cancel() itself rejects must never mask the
+//     typed failure.
+
+/** Build a 200 Response whose body is a stream that records its cancellation. */
+function cancellableStreamResponse(opts: {
+  chunkCount: number;
+  chunkBytes?: number;
+  headers?: Record<string, string>;
+  onCancel: () => void;
+}): Response {
+  const chunkBytes = opts.chunkBytes ?? 8;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let i = 0; i < opts.chunkCount; i++) {
+        controller.enqueue(new Uint8Array(chunkBytes).fill(0x61 + (i % 26)));
+      }
+      controller.close();
+    },
+    cancel() {
+      opts.onCancel();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "content-type": "application/json", ...opts.headers } });
+}
+
+describe("response cancellation on bounded-read rejection", () => {
+  test("a response whose DECLARED Content-Length exceeds the JSON cap has its body cancelled before the typed OVERSIZE failure", async () => {
+    let bodyCancelled = false;
+    const routes: MockRoute[] = [
+      {
+        url: REF_URL,
+        raw: cancellableStreamResponse({
+          chunkCount: 2,
+          headers: { "content-length": String(DEFAULT_MAX_JSON_BYTES + 1) },
+          onCancel: () => {
+            bodyCancelled = true;
+          },
+        }),
+      },
+    ];
+    const { impl } = mockFetch(routes);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl));
+
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "stable-ref" });
+    expect(payload.reason).toContain("declares");
+    // Cancellation is awaited before the failure propagates: by the time the
+    // payload is back, the refused body is already cancelled.
+    expect(bodyCancelled).toBe(true);
+    expect(payload.snapshot).toBeNull();
+  });
+
+  test("a release asset whose DECLARED Content-Length exceeds the transport cap has its body cancelled (asset-fetch stage)", async () => {
+    let bodyCancelled = false;
+    const triple = validTriple();
+    const routes: MockRoute[] = [
+      { url: REF_URL, body: refPayload("tag", TAG_OBJECT_SHA) },
+      { url: TAG_URL, body: tagPayload(triple.pointerJson, "commit", COMMIT) },
+      {
+        url: assetUrl(TAG, SNAPSHOT_ASSET_NAME),
+        raw: cancellableStreamResponse({
+          chunkCount: 2,
+          headers: { "content-length": "65" }, // cap is 64 in this test
+          onCancel: () => {
+            bodyCancelled = true;
+          },
+        }),
+      },
+      { url: assetUrl(TAG, PROVENANCE_ASSET_NAME), body: triple.provenanceBytes },
+      { url: assetUrl(TAG, CHECKSUM_ASSET_NAME), body: triple.checksumBytes },
+    ];
+    const { impl } = mockFetch(routes);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl, { maxBytes: 64 }));
+
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "asset-fetch" });
+    expect(payload.reason).toContain("declares");
+    expect(payload.reason).toContain(SNAPSHOT_ASSET_NAME);
+    expect(bodyCancelled).toBe(true);
+    expect(payload.snapshot).toBeNull();
+  });
+
+  test("a STREAMED response overflowing the JSON cap mid-read has its reader cancelled (AND AWAITED) before the typed OVERSIZE failure", async () => {
+    // No Content-Length declared — the cap fires during the streamed read
+    // (4 chunks × 8 bytes = 32 > 16). The cancel hook resolves
+    // ASYNCHRONOUSLY: fire-and-forget cancellation (not awaiting
+    // reader.cancel()) would leave the flag unset when the payload returns,
+    // so this test fails unless the implementation awaits the cancellation.
+    let streamCancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 4; i++) controller.enqueue(new Uint8Array(8).fill(0x61 + i));
+        controller.close();
+      },
+      cancel() {
+        return new Promise<void>((resolve) => {
+          setTimeout(() => {
+            streamCancelled = true;
+            resolve();
+          }, 20);
+        });
+      },
+    });
+    const routes: MockRoute[] = [
+      {
+        url: REF_URL,
+        raw: new Response(stream, { status: 200, headers: { "content-type": "application/json" } }),
+      },
+    ];
+    const { impl } = mockFetch(routes);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl, { maxJsonBytes: 16 }));
+
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "stable-ref" });
+    expect(payload.reason).toContain("refusing to parse a truncated body");
+    expect(streamCancelled).toBe(true);
+    expect(payload.snapshot).toBeNull();
+  });
+
+  test("a hostile stream whose cancel() REJECTS never masks the typed OVERSIZE failure", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 4; i++) controller.enqueue(new Uint8Array(8).fill(0x62));
+        controller.close();
+      },
+      cancel() {
+        return Promise.reject(new Error("cancel refused by hostile stream"));
+      },
+    });
+    const routes: MockRoute[] = [
+      {
+        url: REF_URL,
+        raw: new Response(stream, { status: 200, headers: { "content-type": "application/json" } }),
+      },
+    ];
+    const { impl } = mockFetch(routes);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl, { maxJsonBytes: 16 }));
+
+    // The typed failure still surfaces — cancellation cleanup is best-effort.
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "stable-ref" });
+    expect(payload.reason).toContain("refusing to parse a truncated body");
+    expect(payload.snapshot).toBeNull();
   });
 });
