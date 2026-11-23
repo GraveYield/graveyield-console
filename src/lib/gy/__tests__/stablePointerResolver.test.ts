@@ -33,6 +33,10 @@
 //   23. dispatcher: stable-pointer + legacy source is a SOURCE_CONFLICT
 //   24. dispatcher: legacy GY_SNAPSHOT_URL passthrough unchanged
 //   25. dispatcher: no source configured → NO_SOURCE_CONFIGURED
+//   26. bounded GitHub API JSON responses: under-cap accepted, exactly-at-cap
+//       boundary accepted, over-cap rejected with typed OVERSIZE before the
+//       pointer is resolved, no silent truncation, HTTP-status precedence,
+//       unchanged non-JSON typing, custom cap wiring
 //
 // Mirrors the fixture approach of stablePointer.test.ts: the bytes are
 // derived from the committed producer fixture (src/lib/gy/snapshot.json).
@@ -50,6 +54,7 @@ import {
   type PublicationProvenance,
 } from "../stablePointer";
 import {
+  DEFAULT_MAX_JSON_BYTES,
   resolveSnapshotArtifact,
   resolveSnapshotViaStablePointer,
   type StablePointerResolverDeps,
@@ -174,7 +179,15 @@ function mockFetch(routes: MockRoute[]) {
     if (!route) throw new Error(`mock fetch: no route for ${url}`);
     if (route.throw) throw route.throw;
     if (route.status !== undefined && route.status !== 200) {
-      return new Response("mock error body", { status: route.status });
+      // Non-200 answers may still carry a (potentially large) body — the
+      // resolver must classify by STATUS before it ever reads the body.
+      const errBody =
+        route.body === undefined
+          ? "mock error body"
+          : typeof route.body === "string"
+            ? route.body
+            : JSON.stringify(route.body);
+      return new Response(errBody, { status: route.status });
     }
     const body = route.body;
     if (typeof body === "string") return jsonResponse(body, route.status ?? 200);
@@ -705,5 +718,129 @@ describe("source dispatcher", () => {
     );
     expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "PARSE_FAILED", stage: "stable-ref" });
     expect(requested.length).toBe(0);
+  });
+});
+
+// ─── 26. Bounded GitHub API JSON responses ──────────────────────────────────
+//
+// Every test here drives the REAL helper path (streamed byte-counted read →
+// JSON parse → resolver chain) over the mocked transport — none of them
+// merely asserts a constant. The documented cap is DEFAULT_MAX_JSON_BYTES
+// (1 MiB, inclusive: bodies AT the cap are accepted, bodies OVER it are
+// cancelled and rejected before any parsing).
+
+/** An annotated-tag payload whose serialized JSON body is EXACTLY `targetBytes` bytes. */
+function tagPayloadPaddedToExactBytes(message: string, targetBytes: number): object {
+  const enc = new TextEncoder();
+  const base = { ...tagPayload(message, "commit", COMMIT), response_pad: "" };
+  const baseLen = enc.encode(JSON.stringify(base)).byteLength;
+  const padLen = targetBytes - baseLen;
+  if (padLen < 0) throw new Error(`cannot pad a ${baseLen}-byte payload down to ${targetBytes} bytes`);
+  // The pad value is ASCII and JSON-serializes 1:1, so the body is exactly targetBytes.
+  return { ...tagPayload(message, "commit", COMMIT), response_pad: "x".repeat(padLen) };
+}
+
+describe("bounded GitHub API JSON responses", () => {
+  test("a normal JSON response under the cap is accepted (helper path exercised end-to-end)", async () => {
+    const { impl, requested } = mockFetch(validRoutes());
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl));
+    expect(payload.artifactState).toBe("valid");
+    expect(payload.snapshot).not.toBeNull();
+    expect(requested.length).toBe(5); // ref + tag + three assets — the JSON reads succeeded
+  });
+
+  test("a response of EXACTLY the documented cap is accepted (the boundary is inclusive)", async () => {
+    const triple = validTriple();
+    const padded = tagPayloadPaddedToExactBytes(triple.pointerJson, DEFAULT_MAX_JSON_BYTES);
+    const routes: MockRoute[] = [
+      { url: REF_URL, body: refPayload("tag", TAG_OBJECT_SHA) },
+      { url: TAG_URL, body: padded },
+      ...validRoutes(triple).slice(2),
+    ];
+    const { impl } = mockFetch(routes);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl));
+    expect(payload.artifactState).toBe("valid");
+    expect(payload.snapshot).not.toBeNull();
+    expect(payload.reasonCode).toBeNull();
+  });
+
+  test("a response one byte over the cap is rejected with a typed OVERSIZE failure", async () => {
+    const triple = validTriple();
+    const over = tagPayloadPaddedToExactBytes(triple.pointerJson, DEFAULT_MAX_JSON_BYTES + 1);
+    const routes: MockRoute[] = [
+      { url: REF_URL, body: refPayload("tag", TAG_OBJECT_SHA) },
+      { url: TAG_URL, body: over },
+    ];
+    const { impl } = mockFetch(routes);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl));
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "annotated-tag" });
+    expect(payload.reason).toContain("cap");
+  });
+
+  test("an oversized annotated-tag response carrying a VALID pointer is refused BEFORE pointer resolution", async () => {
+    const triple = validTriple();
+    // The message itself is a perfectly valid pointer — only the response
+    // size disqualifies it, so any acceptance would prove the cap is a no-op.
+    const over = tagPayloadPaddedToExactBytes(triple.pointerJson, DEFAULT_MAX_JSON_BYTES + 1024);
+    const { impl, requested } = mockFetch([
+      { url: REF_URL, body: refPayload("tag", TAG_OBJECT_SHA) },
+      { url: TAG_URL, body: over },
+    ]);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl));
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "annotated-tag" });
+    // The chain stopped before pointer resolution: no versioned asset fetch.
+    expect(requested.filter((u) => u.includes("/releases/download/")).length).toBe(0);
+    expect(payload.snapshot).toBeNull();
+  });
+
+  test("an over-cap response is rejected BEFORE parsing even when the body is not JSON at all", async () => {
+    // If the implementation truncated and parsed, this body's prefix could
+    // still be handed to a parser; instead the cap must fire first and the
+    // error must name the refusal explicitly — no silent truncation.
+    const { impl } = mockFetch([
+      { url: REF_URL, body: "x".repeat(DEFAULT_MAX_JSON_BYTES + 10) },
+    ]);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl));
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "stable-ref" });
+    expect(payload.reason).toContain("refusing to parse a truncated body");
+    expect(payload.snapshot).toBeNull();
+  });
+
+  test("HTTP error responses keep their typed status handling even with an oversized body", async () => {
+    // Status classification happens BEFORE the body is read: a 404 with a
+    // huge body is FETCH_HTTP_STATUS, never OVERSIZE.
+    const { impl } = mockFetch([
+      { url: REF_URL, status: 404, body: "x".repeat(DEFAULT_MAX_JSON_BYTES + 10) },
+    ]);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl));
+    expectUnavailable(payload, { artifactState: "missing", reasonCode: "FETCH_HTTP_STATUS", stage: "stable-ref" });
+    expect(payload.reason).toContain("404");
+  });
+
+  test("a non-JSON response under the cap still fails with the UNCHANGED not-valid-JSON typing", async () => {
+    // The raw body itself is not JSON (under the cap) — the streaming read
+    // succeeds, the strict JSON.parse fails, and the failure mapping is
+    // unchanged from the pre-cap implementation.
+    const { impl } = mockFetch([
+      { url: REF_URL, body: refPayload("tag", TAG_OBJECT_SHA) },
+      { url: TAG_URL, body: "{not json at all" },
+    ]);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl));
+    expectUnavailable(payload, { artifactState: "missing", reasonCode: "FETCH_FAILED", stage: "annotated-tag" });
+    expect(payload.reason).toContain("not valid JSON");
+  });
+
+  test("a custom maxJsonBytes is honored — the cap is configurable and still enforced before parsing", async () => {
+    const triple = validTriple();
+    const padded = tagPayloadPaddedToExactBytes(triple.pointerJson, 2048); // valid JSON, 2 KB body
+    const routes: MockRoute[] = [
+      { url: REF_URL, body: refPayload("tag", TAG_OBJECT_SHA) },
+      { url: TAG_URL, body: padded },
+      ...validRoutes(triple).slice(2),
+    ];
+    const { impl, requested } = mockFetch(routes);
+    const payload = await resolveSnapshotViaStablePointer(env(), deps(impl, { maxJsonBytes: 1024 }));
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "annotated-tag" });
+    expect(requested.filter((u) => u.includes("/releases/download/")).length).toBe(0);
   });
 });
