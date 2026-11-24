@@ -174,7 +174,11 @@ export async function resolveSnapshotSource(
         if (value) {
           total += value.byteLength;
           if (total > maxBytes) {
-            void reader.cancel();
+            // Await cancellation and swallow its rejection (same contract as
+            // cancelQuietly in stablePointerResolver.ts): a hostile stream's
+            // cancel() refusal must never surface as an unhandled rejection
+            // nor mask the typed OVERSIZE failure about to be returned.
+            await reader.cancel().catch(() => {});
             return unavailable("corrupt", "OVERSIZE", `Artifact stream exceeded the ${maxBytes}-byte transport cap.`, source);
           }
           chunks.push(value);
