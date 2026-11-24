@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "snapshotGeneratedAtUnixMs": 1795499272303,
+  "indexerSourceCommitSha": "988aab1fc47074cb990c6bf49666e784eab8d139",
+  "cluster": "mainnet-beta",
+  "freshness": {
+    "maxAgeMs": 86400000
+  },
+  "counts": {
+    "rawAccounts": 4200,
+    "parsedPools": 4200,
+    "supportedWsolPairs": 2,
+    "m1SourcingRejected": 0,
+    "enriched": 2
+  },
+  "snapshotSha256": "f171d79b286686eae8a103f6c15630df9b4a0a4d84e91474993520e3da0e808c",
+  "snapshotByteLength": 2689,
+  "workflowRunId": "45335777653",
+  "workflowAttempt": "1",
+  "repository": "GraveYield/grave-indexer-pub-rehearsal",
+  "versionedTag": "console-snapshot-prod-20261124T054752Z-988aab1fc470"
+}

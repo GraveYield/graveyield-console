@@ -41,6 +41,10 @@
 //       rejection cancels the body (API + asset paths), streamed-overflow
 //       cancellation is awaited, hostile cancel() rejections never mask the
 //       typed failure
+//   28. legacy-source (GY_SNAPSHOT_URL) cancellation on streamed-overflow
+//       rejection (M-1): same awaited-cancellation contract as the
+//       stable-pointer path — hostile cancel() rejections never mask the
+//       typed OVERSIZE failure nor raise an unhandled rejection
 //
 // Mirrors the fixture approach of stablePointer.test.ts: the bytes are
 // derived from the committed producer fixture (src/lib/gy/snapshot.json).
@@ -240,9 +244,12 @@ function deps(fetchImpl: typeof fetch, extra?: Partial<StablePointerResolverDeps
 }
 
 /** Dispatcher deps: the legacy topologies require fs injection (never used by the resolver path). */
-function dispatchDeps(fetchImpl: typeof fetch): Parameters<typeof resolveSnapshotArtifact>[1] {
+function dispatchDeps(
+  fetchImpl: typeof fetch,
+  extra?: Partial<StablePointerResolverDeps>,
+): Parameters<typeof resolveSnapshotArtifact>[1] {
   return {
-    ...deps(fetchImpl),
+    ...deps(fetchImpl, extra),
     readFile: async () => {
       throw new Error("readFile must not be called in these tests");
     },
@@ -1001,6 +1008,84 @@ describe("response cancellation on bounded-read rejection", () => {
     // The typed failure still surfaces — cancellation cleanup is best-effort.
     expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE", stage: "stable-ref" });
     expect(payload.reason).toContain("refusing to parse a truncated body");
+    expect(payload.snapshot).toBeNull();
+  });
+});
+
+// ─── 28. Legacy-source cancellation on streamed-overflow rejection (M-1) ────
+//
+// The legacy GY_SNAPSHOT_URL path (resolveSnapshotSource) had the same
+// streamed-overflow branch the stable-pointer path fixed in 6de3948/c869ffa:
+// fire-and-forget `void reader.cancel()` — unawaited, rejection unhandled.
+// A hostile stream whose cancel() itself rejects would then surface as an
+// unhandled rejection and crash the Node process hosting /api/gy/snapshot.
+// These tests pin the corrected contract for the legacy topology: the
+// cancellation is awaited and its rejection swallowed, and the typed
+// OVERSIZE failure is preserved exactly as before.
+
+const LEGACY_URL = "https://artifacts.example/gy/console-snapshot.json";
+
+function legacyEnv(): StablePointerResolverEnv {
+  return env({ GY_SNAPSHOT_GITHUB_REPO: null, GY_SNAPSHOT_URL: LEGACY_URL });
+}
+
+describe("legacy source cancellation on streamed-overflow rejection (M-1)", () => {
+  test("a legacy GY_SNAPSHOT_URL response overflowing the transport cap mid-read has its reader cancelled (AND AWAITED) before the typed OVERSIZE failure", async () => {
+    // Same construction as the stable-pointer streamed-overflow test: the
+    // cancel hook resolves ASYNCHRONOUSLY, so fire-and-forget cancellation
+    // would leave the flag unset when the payload returns — this test fails
+    // unless the implementation awaits reader.cancel().
+    let streamCancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 4; i++) controller.enqueue(new Uint8Array(8).fill(0x61 + i));
+        controller.close();
+      },
+      cancel() {
+        return new Promise<void>((resolve) => {
+          setTimeout(() => {
+            streamCancelled = true;
+            resolve();
+          }, 20);
+        });
+      },
+    });
+    const { impl, requested } = mockFetch([
+      { url: LEGACY_URL, raw: new Response(stream, { status: 200, headers: { "content-type": "application/json" } }) },
+    ]);
+    const payload = await resolveSnapshotArtifact(legacyEnv(), dispatchDeps(impl, { maxBytes: 16 }));
+
+    // Error classification unchanged by the fix: corrupt / OVERSIZE, no snapshot.
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE" });
+    expect(payload.reason).toContain("Artifact stream exceeded the 16-byte transport cap");
+    expect(payload.source.kind).toBe("url");
+    expect(requested.length).toBe(1);
+    // Cancellation completed before the failure propagated.
+    expect(streamCancelled).toBe(true);
+    expect(payload.snapshot).toBeNull();
+  });
+
+  test("a hostile legacy stream whose cancel() REJECTS never masks the typed OVERSIZE failure nor raises an unhandled rejection", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 4; i++) controller.enqueue(new Uint8Array(8).fill(0x62));
+        controller.close();
+      },
+      cancel() {
+        return Promise.reject(new Error("cancel refused by hostile stream"));
+      },
+    });
+    const { impl } = mockFetch([
+      { url: LEGACY_URL, raw: new Response(stream, { status: 200, headers: { "content-type": "application/json" } }) },
+    ]);
+    // If the fix regressed (void reader.cancel()), this rejection would escape
+    // unhandled and fail the whole bun test run — an unhandled rejection is a
+    // hard test failure, so a passing run here is itself the assertion.
+    const payload = await resolveSnapshotArtifact(legacyEnv(), dispatchDeps(impl, { maxBytes: 16 }));
+
+    // The typed failure still surfaces — cancellation cleanup is best-effort.
+    expectUnavailable(payload, { artifactState: "corrupt", reasonCode: "OVERSIZE" });
+    expect(payload.reason).toContain("Artifact stream exceeded the 16-byte transport cap");
     expect(payload.snapshot).toBeNull();
   });
 });

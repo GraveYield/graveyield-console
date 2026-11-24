@@ -1,0 +1,24 @@
+{
+  "node_id": "TA_kwDOV2X-89oAKGNlMTNlYTVjMDVjNmZlMmUzMDM4YmRlMTE2YzA3YjU0YWY0ZGE0YTI",
+  "sha": "ce13ea5c05c6fe2e3038bde116c07b54af4da4a2",
+  "url": "https://api.github.com/repos/GraveYield/grave-indexer-pub-rehearsal/git/tags/ce13ea5c05c6fe2e3038bde116c07b54af4da4a2",
+  "tagger": {
+    "name": "github-actions[bot]",
+    "email": "41898282+github-actions[bot]@users.noreply.github.com",
+    "date": "2026-11-24T05:52:34Z"
+  },
+  "object": {
+    "sha": "988aab1fc47074cb990c6bf49666e784eab8d139",
+    "type": "commit",
+    "url": "https://api.github.com/repos/GraveYield/grave-indexer-pub-rehearsal/git/commits/988aab1fc47074cb990c6bf49666e784eab8d139"
+  },
+  "tag": "console-snapshot-prod",
+  "message": "{\"pointerSchema\":\"graveyield.console-snapshot-stable-pointer.v1\",\"stableRef\":\"console-snapshot-prod\",\"versionedTag\":\"console-snapshot-prod-20261124T054752Z-988aab1fc470\",\"sourceCommit\":\"988aab1fc47074cb990c6bf49666e784eab8d139\",\"publishedAtUnixMs\":1795499272303,\"snapshot\":{\"name\":\"console-snapshot.json\",\"sha256\":\"f171d79b286686eae8a103f6c15630df9b4a0a4d84e91474993520e3da0e808c\",\"byteLength\":2689},\"provenance\":{\"name\":\"console-snapshot-provenance.json\",\"sha256\":\"c8b082356e4a4a4e80d9680cd3c04c48f8db3528759843739e80724341c78d24\",\"byteLength\":672},\"checksum\":{\"name\":\"console-snapshot.sha256\",\"sha256\":\"f4687cc738ac0d2d0a4f4139f8b6240059d613600745468f4c7cdf84be4752dd\",\"byteLength\":88},\"previousVersionedTag\":\"console-snapshot-prod-20261123T125323Z-fcd00ad93155\",\"previousTagObjectSha\":\"b0599bb324fc646956f0ab2a6a951b1702bde1cb\"}",
+  "verification": {
+    "verified": false,
+    "reason": "unsigned",
+    "signature": null,
+    "payload": null,
+    "verified_at": null
+  }
+}

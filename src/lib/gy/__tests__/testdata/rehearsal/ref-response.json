@@ -1,0 +1,10 @@
+{
+  "ref": "refs/tags/console-snapshot-prod",
+  "node_id": "REF_kwDOV2X-879yZWZzL3RhZ3MvY29uc29sZS1zbmFwc2hvdC1wcm9k",
+  "url": "https://api.github.com/repos/GraveYield/grave-indexer-pub-rehearsal/git/refs/tags/console-snapshot-prod",
+  "object": {
+    "sha": "ce13ea5c05c6fe2e3038bde116c07b54af4da4a2",
+    "type": "tag",
+    "url": "https://api.github.com/repos/GraveYield/grave-indexer-pub-rehearsal/git/tags/ce13ea5c05c6fe2e3038bde116c07b54af4da4a2"
+  }
+}
