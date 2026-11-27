@@ -498,11 +498,20 @@ function hydrateClaimsPayloadInner(json: unknown, nowMs: number): ClaimsTranspor
   // half-broken payload is not data).
   if (artifactState === "missing" || artifactState === "corrupt") {
     if (json.distribution !== null && json.distribution !== undefined) throw new Error("payload rejected by the client-side gate");
+    const mcWallet = validateOptStrict(json.wallet, validateWalletClaim);
+    // D4 (review): missing/corrupt artifacts are equally non-actionable —
+    // an envelope claiming them while carrying a prepared claim instruction
+    // is dishonest and refused whole.
+    if (mcWallet !== null && mcWallet.preparedClaim !== null) {
+      throw new Error(
+        `payload rejected by the client-side gate: a ${artifactState} artifact must never carry a prepared claim instruction`,
+      );
+    }
     return {
       ...transport,
       distribution: null,
       onchain: validateOptStrict(json.onchain, validateOnchain),
-      wallet: validateOptStrict(json.wallet, validateWalletClaim),
+      wallet: mcWallet,
     };
   }
 
@@ -517,11 +526,14 @@ function hydrateClaimsPayloadInner(json: unknown, nowMs: number): ClaimsTranspor
   if (checkedAtUnixMs > nowMs + 5 * 60_000) throw new Error("payload rejected by the client-side gate");
 
   const wallet = validateOptStrict(json.wallet, validateWalletClaim);
-  // D4: a prepared claim instruction may ride ONLY with a valid artifact.
-  // A stale artifact is informational-only — an envelope claiming "stale"
-  // while carrying an actionable instruction is dishonest and refused.
-  if (artifactState === "stale" && wallet !== null && wallet.preparedClaim !== null) {
-    throw new Error("payload rejected by the client-side gate: a stale artifact must never carry a prepared claim instruction");
+  // D4 (review): a prepared claim instruction may ride ONLY with a VALID
+  // artifact. ANY non-valid state (stale | missing | corrupt) is
+  // informational-only — an envelope claiming a non-valid state while
+  // carrying an actionable instruction is dishonest and refused whole.
+  if (artifactState !== "valid" && wallet !== null && wallet.preparedClaim !== null) {
+    throw new Error(
+      `payload rejected by the client-side gate: a ${artifactState} artifact must never carry a prepared claim instruction`,
+    );
   }
 
   return {

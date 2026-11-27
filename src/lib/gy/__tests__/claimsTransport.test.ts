@@ -309,6 +309,9 @@ describe("hydrateClaimsPayload — client-side fail-closed gate", () => {
       dataState: "unavailable",
       distribution: null,
       reason: "No distribution source configured",
+      // D4 (review): a non-valid state is informational-only — the server
+      // never attaches a prepared claim instruction to it.
+      wallet: { ...(validPayloadJson().wallet as Record<string, unknown>), preparedClaim: null },
     };
     const p = hydrateClaimsPayload(missing, NOW);
     expect(p).not.toBeNull();

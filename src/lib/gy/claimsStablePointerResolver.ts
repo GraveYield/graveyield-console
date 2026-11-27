@@ -24,10 +24,13 @@
 import {
   CLAIMS_ARTIFACT_ASSET_NAME,
   CLAIMS_CHECKSUM_ASSET_NAME,
+  CLAIMS_MANIFEST_ASSET_NAME,
   CLAIMS_STABLE_REF_DEFAULT,
+  parseClaimsManifest,
   parseClaimsStablePointer,
   verifyClaimsPointerMatchesBytes,
   ClaimsPointerError,
+  type ClaimsManifest,
   type ClaimsStablePointerV1,
 } from "./claimsStablePointer";
 
@@ -63,8 +66,6 @@ export class ClaimsResolverError extends Error {
 export interface ClaimsResolverEnv {
   /** GitHub repository ("owner/repo") holding the stable ref and versioned releases. */
   GY_CLAIMS_GITHUB_REPO?: string | null;
-  /** Stable reference name (default: claims-artifact-prod). */
-  GY_CLAIMS_STABLE_REF?: string | null;
   /** GitHub API base (default https://api.github.com; override for tests/GHES). */
   GY_CLAIMS_GITHUB_API_BASE?: string | null;
   /** GitHub asset base (default https://github.com; override for tests). */
@@ -86,6 +87,7 @@ export interface ClaimsResolverDeps {
 export interface ClaimsResolvedArtifact {
   artifactBytes: Uint8Array;
   pointer: ClaimsStablePointerV1;
+  manifest: ClaimsManifest;
   artifactSha256: string;
 }
 
@@ -159,7 +161,13 @@ export async function resolveClaimsStablePointer(
   if (!repo || !/^[^/]+\/[^/]+$/.test(repo)) {
     throw new ClaimsResolverError("stable-ref", "missing", "GY_CLAIMS_GITHUB_REPO must be configured as owner/repo");
   }
-  const stableRef = env.GY_CLAIMS_STABLE_REF?.trim() || CLAIMS_STABLE_REF_DEFAULT;
+  // D4 (review): the stable reference is a FIXED part of the architecture.
+  // The previously supported GY_CLAIMS_STABLE_REF override was removed —
+  // the strict pointer parser only ever accepts
+  // graveyield.claims-artifact-stable-pointer.v1 pointers naming
+  // claims-artifact-prod, so an override could only ever produce a
+  // guaranteed-refused chain. There is exactly one production reference.
+  const stableRef = CLAIMS_STABLE_REF_DEFAULT;
   const assetsBase = (env.GY_CLAIMS_GITHUB_ASSETS_BASE?.trim() || "https://github.com").replace(/\/$/, "");
 
   // 1. stable ref → tag object sha
@@ -218,14 +226,23 @@ export async function resolveClaimsStablePointer(
     return readCapped(res, deps.maxBytes ?? DEFAULT_CLAIMS_RESOLVER_MAX_BYTES, "asset-fetch");
   };
   const artifactBytes = await fetchAsset(CLAIMS_ARTIFACT_ASSET_NAME);
+  const manifestBytes = await fetchAsset(CLAIMS_MANIFEST_ASSET_NAME);
   const checksumBytes = await fetchAsset(CLAIMS_CHECKSUM_ASSET_NAME);
 
-  // 6. digest + length + sidecar against the pointer's immutable identity
+  // 6. digest + length + manifest schema/consistency + sidecar, all against
+  //    the pointer's immutable identity. A manifest mismatch (digest,
+  //    length, schema, or identity fields) is refused BEFORE the artifact
+  //    can ever become actionable.
   try {
+    const manifest = parseClaimsManifest(
+      Buffer.from(manifestBytes).toString("utf8"),
+      pointer,
+    );
     return {
       artifactBytes,
       pointer,
-      ...verifyClaimsPointerMatchesBytes({ pointer, artifactBytes, checksumBytes }),
+      manifest,
+      ...verifyClaimsPointerMatchesBytes({ pointer, artifactBytes, manifestBytes, checksumBytes }),
     };
   } catch (e) {
     if (e instanceof ClaimsPointerError) {

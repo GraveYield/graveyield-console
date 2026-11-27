@@ -183,7 +183,7 @@ export async function resolveClaimsSource(
           e.artifactState,
           "FETCH_FAILED",
           `Claims stable-pointer resolution failed at stage "${stage(e)}": ${e.message}`,
-          { kind: "stable-pointer", uri: `${env.GY_CLAIMS_GITHUB_REPO?.trim()}@${env.GY_CLAIMS_STABLE_REF?.trim() || "claims-artifact-prod"}` },
+          { kind: "stable-pointer", uri: `${env.GY_CLAIMS_GITHUB_REPO?.trim()}@claims-artifact-prod` },
         );
       }
       return unavailable("missing", "FETCH_FAILED", `Claims stable-pointer resolution failed: ${errText(e)}`, { kind: "stable-pointer", uri: null });
@@ -337,5 +337,32 @@ export function claimsBytesToPayload(
       wallet: null,
     },
     artifact,
+  };
+}
+
+
+/**
+ * D4 (review): PRODUCTION SOURCE ENFORCEMENT. An actionable claim
+ * instruction (prepared `claim_lp_proceeds`) may be produced ONLY when
+ * the artifact arrived through the immutable stable-pointer topology —
+ * the only source whose bytes were digest-verified against the published
+ * pointer. Direct GY_CLAIMS_PATH / GY_CLAIMS_URL sources remain usable
+ * for non-production or informational display, but their wallet views
+ * are stripped of `preparedClaim` (explicit non-actionable, with an
+ * honest note): they can never bypass stable-pointer verification.
+ */
+export function enforceActionableClaimsSourcePolicy(
+  walletView: import("./claimsContract").WalletClaimView,
+  sourceKind: import("./claimsTransport").ClaimsSourceKind,
+): import("./claimsContract").WalletClaimView {
+  if (sourceKind === "stable-pointer") return walletView;
+  if (walletView.preparedClaim === null && walletView.state !== "claimable") return walletView;
+  return {
+    ...walletView,
+    preparedClaim: null,
+    amountNote:
+      walletView.state === "claimable"
+        ? "This environment's claims source is not the immutable stable pointer (GY_CLAIMS_GITHUB_REPO unset) — the view is informational-only and cannot prepare a claim transaction. Production actionable claims require the verified claims-artifact publication."
+        : walletView.amountNote,
   };
 }

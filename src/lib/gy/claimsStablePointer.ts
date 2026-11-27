@@ -188,31 +188,151 @@ export function parseClaimsStablePointer(text: string): ClaimsStablePointerV1 {
   return p;
 }
 
+/** The claims-artifact manifest published alongside every versioned release. */
+export interface ClaimsManifest {
+  manifestSchema: string;
+  artifact: {
+    asset: string;
+    sha256: string;
+    byteLength: number;
+    formatVersion: number;
+    pool: string;
+    lpMint: string;
+    snapshotSlot: number;
+    merkleRoot: string;
+    producer: { identity: string; version: string };
+  };
+  sourceCommit: string;
+  publishedAtUnixMs: number;
+}
+
+export const CLAIMS_MANIFEST_SCHEMA = "graveyield.claims-artifact-manifest.v1";
+
+const MANIFEST_KEYS = [
+  "manifestSchema",
+  "artifact",
+  "sourceCommit",
+  "publishedAtUnixMs",
+] as const;
+
+/**
+ * D4 (review): strict parse + CONSISTENCY verification of the published
+ * manifest. The manifest must (a) match the strict schema, and (b) agree
+ * with the pointer on every immutable-identity field and with the
+ * artifact's exact digest. Any mismatch refuses the whole chain before
+ * anything can become actionable.
+ */
+export function parseClaimsManifest(
+  text: string,
+  pointer: ClaimsStablePointerV1,
+): ClaimsManifest {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new ClaimsPointerError("manifest is not valid JSON");
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ClaimsPointerError("manifest must be a JSON object");
+  }
+  const obj = raw as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  const expected = [...MANIFEST_KEYS].sort();
+  if (keys.length !== expected.length || keys.some((k, i) => k !== expected[i])) {
+    throw new ClaimsPointerError("manifest keys do not match the strict schema");
+  }
+  if (obj.manifestSchema !== CLAIMS_MANIFEST_SCHEMA) {
+    throw new ClaimsPointerError(`unsupported manifestSchema ${JSON.stringify(obj.manifestSchema)}`);
+  }
+  const a = obj.artifact as Record<string, unknown> | undefined;
+  if (typeof a !== "object" || a === null || Array.isArray(a)) {
+    throw new ClaimsPointerError("manifest.artifact must be an object");
+  }
+  const identity = {
+    asset: a.asset,
+    sha256: a.sha256,
+    byteLength: a.byteLength,
+    formatVersion: a.formatVersion,
+    pool: a.pool,
+    lpMint: a.lpMint,
+    snapshotSlot: a.snapshotSlot,
+    merkleRoot: a.merkleRoot,
+    producer: a.producer,
+  };
+  const checks: Array<[unknown, unknown, string]> = [
+    [identity.asset, CLAIMS_ARTIFACT_ASSET_NAME, "manifest.artifact.asset"],
+    [identity.sha256, pointer.artifact.sha256, "manifest.artifact.sha256 vs pointer"],
+    [identity.byteLength, pointer.artifact.byteLength, "manifest.artifact.byteLength vs pointer"],
+    [identity.formatVersion, 2, "manifest.artifact.formatVersion"],
+    [identity.pool, pointer.pool, "manifest.artifact.pool vs pointer"],
+    [identity.lpMint, pointer.lpMint, "manifest.artifact.lpMint vs pointer"],
+    [identity.snapshotSlot, pointer.snapshotSlot, "manifest.artifact.snapshotSlot vs pointer"],
+    [identity.merkleRoot, pointer.merkleRoot, "manifest.artifact.merkleRoot vs pointer"],
+    [obj.sourceCommit, pointer.sourceCommit, "manifest.sourceCommit vs pointer"],
+    [obj.publishedAtUnixMs, pointer.publishedAtUnixMs, "manifest.publishedAtUnixMs vs pointer"],
+  ];
+  for (const [got, want, what] of checks) {
+    if (JSON.stringify(got) !== JSON.stringify(want)) {
+      throw new ClaimsPointerError(`${what} mismatch (manifest ${JSON.stringify(got)} vs expected ${JSON.stringify(want)})`);
+    }
+  }
+  if (
+    typeof identity.producer !== "object" || identity.producer === null ||
+    (identity.producer as ClaimsStablePointerV1["producer"]).identity !== pointer.producer.identity ||
+    (identity.producer as ClaimsStablePointerV1["producer"]).version !== pointer.producer.version
+  ) {
+    throw new ClaimsPointerError("manifest.artifact.producer mismatch vs pointer");
+  }
+  return {
+    manifestSchema: CLAIMS_MANIFEST_SCHEMA,
+    artifact: {
+      asset: identity.asset as string,
+      sha256: identity.sha256 as string,
+      byteLength: identity.byteLength as number,
+      formatVersion: 2,
+      pool: identity.pool as string,
+      lpMint: identity.lpMint as string,
+      snapshotSlot: identity.snapshotSlot as number,
+      merkleRoot: identity.merkleRoot as string,
+      producer: identity.producer as ClaimsStablePointerV1["producer"],
+    },
+    sourceCommit: obj.sourceCommit as string,
+    publishedAtUnixMs: obj.publishedAtUnixMs as number,
+  };
+}
+
 /**
  * Verify the fetched bytes against the pointer: byte length + SHA-256 for
- * every asset, and the checksum sidecar against the artifact digest.
- * Throws `ClaimsPointerError` on ANY mismatch — a consumer can never
- * accept bytes that do not match the immutable identity.
+ * every asset (artifact + manifest + checksum), and the checksum sidecar
+ * against the artifact digest. Throws `ClaimsPointerError` on ANY
+ * mismatch — a consumer can never accept bytes that do not match the
+ * immutable identity.
  */
 export function verifyClaimsPointerMatchesBytes(args: {
   pointer: ClaimsStablePointerV1;
   artifactBytes: Uint8Array;
+  manifestBytes: Uint8Array;
   checksumBytes: Uint8Array;
 }): { artifactSha256: string } {
-  const { pointer, artifactBytes, checksumBytes } = args;
-  if (artifactBytes.byteLength !== pointer.artifact.byteLength) {
-    throw new ClaimsPointerError(
-      `artifact byte length ${artifactBytes.byteLength} != pointer ${pointer.artifact.byteLength}`,
-    );
-  }
-  const sha = claimsSha256Hex(artifactBytes);
-  if (sha !== pointer.artifact.sha256) {
-    throw new ClaimsPointerError(`artifact sha256 ${sha} != pointer ${pointer.artifact.sha256}`);
+  const { pointer, artifactBytes, manifestBytes, checksumBytes } = args;
+  const assets: Array<[ClaimsPointerAssetDigest, Uint8Array, string]> = [
+    [pointer.artifact, artifactBytes, "artifact"],
+    [pointer.manifest, manifestBytes, "manifest"],
+    [pointer.checksum, checksumBytes, "checksum"],
+  ];
+  for (const [digest, bytes, what] of assets) {
+    if (bytes.byteLength !== digest.byteLength) {
+      throw new ClaimsPointerError(`${what} byte length ${bytes.byteLength} != pointer ${digest.byteLength}`);
+    }
+    const hex = claimsSha256Hex(bytes);
+    if (hex !== digest.sha256) {
+      throw new ClaimsPointerError(`${what} sha256 ${hex} != pointer ${digest.sha256}`);
+    }
   }
   const sidecar = Buffer.from(checksumBytes).toString("utf8").trim();
-  const expected = `${sha}  ${CLAIMS_ARTIFACT_ASSET_NAME}`;
+  const expected = `${pointer.artifact.sha256}  ${CLAIMS_ARTIFACT_ASSET_NAME}`;
   if (sidecar !== expected) {
     throw new ClaimsPointerError("checksum sidecar does not match the artifact digest");
   }
-  return { artifactSha256: sha };
+  return { artifactSha256: pointer.artifact.sha256 };
 }

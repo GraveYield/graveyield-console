@@ -24,7 +24,7 @@
 
 import { readFile, stat } from "node:fs/promises";
 
-import { resolveClaimsSource } from "@/lib/gy/claimsSource";
+import { enforceActionableClaimsSourcePolicy, resolveClaimsSource } from "@/lib/gy/claimsSource";
 import {
   canonicalQueryWallet,
   walletClaimView,
@@ -122,7 +122,12 @@ export async function GET(request: Request): Promise<Response> {
         vaultProgramId: PROGRAM_IDS.graveVault,
       };
       try {
-        walletView = walletClaimView(input);
+        // D4 (review): actionable claims require the immutable
+        // stable-pointer source; path/url sources are informational-only.
+        walletView = enforceActionableClaimsSourcePolicy(
+          walletClaimView(input),
+          resolution.payload.source.kind,
+        );
       } catch (e) {
         // Unreachable after the F1/F2 gates — kept as defense-in-depth: an
         // exception here degrades to snapshot-unavailable, never a 500.

@@ -188,9 +188,20 @@ display, but it can never generate a claim instruction.
 | Variable | Meaning |
 | --- | --- |
 | `GY_CLAIMS_GITHUB_REPO` | `owner/repo` for the claims stable pointer (recommended) |
-| `GY_CLAIMS_STABLE_REF` | override of `claims-artifact-prod` (rarely needed) |
 | `GY_CLAIMS_GITHUB_TOKEN` | optional authenticated read; server-only, never logged |
 | `GY_CLAIMS_URL` / `GY_CLAIMS_PATH` | legacy direct sources (still verified through the same gates) |
 
 Exactly ONE source may be configured. Missing, stale, corrupt, or
 mismatched artifacts render as unavailable/stale — never as claimable.
+
+### Production source enforcement (D4 review)
+
+Actionable claims (a prepared `claim_lp_proceeds` instruction) are
+produced ONLY when the artifact arrived via the immutable stable-pointer
+topology. `GY_CLAIMS_PATH` / `GY_CLAIMS_URL` remain usable for
+non-production / informational display; their wallet views carry no
+prepared instruction and an explicit note. The stable reference is a
+FIXED part of the architecture (`claims-artifact-prod`) — the former
+`GY_CLAIMS_STABLE_REF` override was removed. The published manifest is
+fetched and verified (digest, length, schema, identity consistency with
+the pointer) before any artifact can become actionable.
