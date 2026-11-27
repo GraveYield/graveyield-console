@@ -40,7 +40,7 @@ const POOL = pk(0x42).toBase58();
 
 function artifactJson(): Record<string, unknown> {
   return {
-    format_version: 1,
+    format_version: 2,
     pool_address: POOL,
     amm_program_id: pk(0x43).toBase58(),
     lp_mint: pk(0x44).toBase58(),
@@ -54,6 +54,19 @@ function artifactJson(): Record<string, unknown> {
       { owner: pk(0x22).toBase58(), lp_balance: 2_000, leaf: hex(TREE.leaf(1)!), proof: TREE.proof(1)!.map((p) => hex(p)) },
     ],
     reconciliation: { enumerated_total: 3_000, entries_total: 3_000, sink_exclusions_total: 0 },
+    exclusions: [],
+    locked: { lock_records_seen: 0, total_locked: 0, attributions: [], custody: null },
+    provenance: {
+      sink_ledger: null,
+      lock_evidence: {
+        source: "rpc",
+        program_id: "GsSCS3vPWrtJ5Y9aEVVT65fmrex5P5RGHXdZvsdbWgfo",
+        commitment: "confirmed",
+        anchor_slot: 331_902_118,
+        records_seen: 0,
+        total_locked: 0,
+      },
+    },
   };
 }
 
@@ -207,7 +220,7 @@ function validPayloadJson(): Record<string, unknown> {
     ageMs: 0,
     maxAgeMs: DEFAULT_CLAIMS_MAX_AGE_MS,
     distribution: {
-      formatVersion: 1,
+      formatVersion: 2,
       poolAddress: POOL,
       ammProgramId: pk(0x43).toBase58(),
       lpMint: pk(0x44).toBase58(),
