@@ -142,3 +142,66 @@ pause), and the UI says so: distributions remain claimable indefinitely.
 - It never estimates eligibility from partial data: unknown is
   `snapshot-unavailable`, never "ineligible"; absent is `no-claim-record`,
   never "claimable".
+
+## D4 — claims artifact verification, stable pointer, and on-chain binding (2026-11-27)
+
+The console consumes **exactly** the D2 claims-grade v2 artifact the Rust
+producer emits (`format_version: 2` with `exclusions`, `locked`, and
+`provenance`). The legacy v1 contract is REFUSED — fail-closed at the
+schema gate; no permissive parsing drops security-relevant fields.
+
+### Required verification before a claim is actionable
+
+Server-side (`claimsSource.ts` → `claimsContract.ts`), in order:
+
+1. **Stable-pointer resolution** (when `GY_CLAIMS_GITHUB_REPO` is set;
+   the recommended topology, mirroring the indexer's
+   `grave-artifact-prod`/`claims-artifact-prod` publication): resolve
+   `refs/tags/claims-artifact-prod` → annotated tag object → strict
+   pointer parse (`graveyield.claims-artifact-stable-pointer.v1`) →
+   fetch artifact + checksum from the POINTER's versioned release (never
+   a repo-wide latest URL) → verify byte length + SHA-256 + checksum
+   sidecar. Every stage failure maps to `missing`/`corrupt` with its
+   resolver stage in the envelope.
+2. **Contract gate**: exact-integer u64 parsing (float-rounded values
+   refused), v2 schema (exclusions / locked report / provenance
+   REQUIRED), provenance validation (lock evidence must be `rpc` from
+   the UNCX Raydium AMM V4 locker program, commitment in
+   {confirmed, finalized}, anchor slot = snapshot slot, records/totals
+   agreement; governed sink-ledger provenance required with explicit
+   sinks), full SDK Merkle re-derivation.
+3. **On-chain binding** (`walletClaimView`): the artifact's pool (by
+   registry-PDA derivation), AMM program, pinned LP supply, and Merkle
+   root must all match the on-chain PoolRegistry before any claim row or
+   prepared `claim_lp_proceeds` instruction is produced.
+
+### Stale/cached data is informational-only
+
+Freshness degradation (`effectiveClaimsState`) and the last-good
+holding rule strip `wallet.preparedClaim` when the artifact leaves its
+budget; the hydration gate REFUSES any envelope whose state is not
+`valid` while carrying a prepared claim instruction. A stale row may
+display, but it can never generate a claim instruction.
+
+### Environment
+
+| Variable | Meaning |
+| --- | --- |
+| `GY_CLAIMS_GITHUB_REPO` | `owner/repo` for the claims stable pointer (recommended) |
+| `GY_CLAIMS_GITHUB_TOKEN` | optional authenticated read; server-only, never logged |
+| `GY_CLAIMS_URL` / `GY_CLAIMS_PATH` | legacy direct sources (still verified through the same gates) |
+
+Exactly ONE source may be configured. Missing, stale, corrupt, or
+mismatched artifacts render as unavailable/stale — never as claimable.
+
+### Production source enforcement (D4 review)
+
+Actionable claims (a prepared `claim_lp_proceeds` instruction) are
+produced ONLY when the artifact arrived via the immutable stable-pointer
+topology. `GY_CLAIMS_PATH` / `GY_CLAIMS_URL` remain usable for
+non-production / informational display; their wallet views carry no
+prepared instruction and an explicit note. The stable reference is a
+FIXED part of the architecture (`claims-artifact-prod`) — the former
+`GY_CLAIMS_STABLE_REF` override was removed. The published manifest is
+fetched and verified (digest, length, schema, identity consistency with
+the pointer) before any artifact can become actionable.

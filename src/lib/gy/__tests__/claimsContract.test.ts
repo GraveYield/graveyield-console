@@ -74,6 +74,19 @@ function artifactJson(): Record<string, unknown> {
       entries_total: Number(SUPPLY),
       sink_exclusions_total: 0,
     },
+    exclusions: [],
+    locked: { lock_records_seen: 0, total_locked: 0, attributions: [], custody: null },
+    provenance: {
+      sink_ledger: null,
+      lock_evidence: {
+        source: "rpc",
+        program_id: "GsSCS3vPWrtJ5Y9aEVVT65fmrex5P5RGHXdZvsdbWgfo",
+        commitment: "confirmed",
+        anchor_slot: 331_902_118,
+        records_seen: 0,
+        total_locked: 0,
+      },
+    },
   };
 }
 
@@ -85,6 +98,7 @@ function parseOk(): DistributionArtifact {
 
 const REGISTRY: RegistryFacts = {
   merkleRoot: REGISTRY_ROOT,
+  ammProgramId: AMM,
   lpTotalSupplyAtSnapshot: SUPPLY,
   lpHolderPoolTotalLamports: REGISTRY_TOTAL,
 };
@@ -113,10 +127,13 @@ describe("parseDistributionArtifact + verifyDistributionIntegrity", () => {
     expect(a.lpTotalSupplyAtSnapshot).toBe(SUPPLY);
   });
 
-  test("rejects a foreign format_version", () => {
+  test("rejects foreign format_versions (legacy v1 and unknown) fail-closed", () => {
     const raw = artifactJson();
-    raw.format_version = 2;
-    expect(() => parseDistributionArtifact(raw)).toThrow(/format_version/);
+    raw.format_version = 1;
+    expect(() => parseDistributionArtifact(raw)).toThrow(/format_version 1/);
+    const raw3 = artifactJson();
+    raw3.format_version = 3;
+    expect(() => parseDistributionArtifact(raw3)).toThrow(/format_version/);
   });
 
   test("rejects empty entries and leaf_count mismatch", () => {
@@ -187,13 +204,16 @@ describe("parseDistributionArtifact + verifyDistributionIntegrity", () => {
 
     const badIdentity = artifactJson();
     (badIdentity.reconciliation as Record<string, unknown>).sink_exclusions_total = 5;
-    expect(() => parseDistributionArtifact(badIdentity)).toThrow(/entries \+ sinks != enumerated/);
+    expect(() => parseDistributionArtifact(badIdentity)).toThrow(/sink_exclusions_total/);
 
     const badSupply = artifactJson();
     const badRec = badSupply.reconciliation as Record<string, unknown>;
     badRec.sink_exclusions_total = 1; // identity holds: 6000 + 1 = 6001
     badRec.enumerated_total = Number(SUPPLY) + 1;
-    expect(() => parseDistributionArtifact(badSupply)).toThrow(/enumerated_total != lp_total_supply_at_snapshot/);
+    // D4: the exclusion ledger now re-checks the sink total FIRST — with an
+    // empty exclusions array, the sink-total gate fires before the supply
+    // identity. Both invariants are fail-closed; this pins the new gate.
+    expect(() => parseDistributionArtifact(badSupply)).toThrow(/sink_exclusions_total/);
   });
 
   test("the SDK tree builder is the byte-order authority — string order is not enough", () => {
@@ -270,6 +290,19 @@ describe("parseDistributionArtifact + verifyDistributionIntegrity", () => {
         proof: proofOf.get(o.toBase58()),
       })),
       reconciliation: { enumerated_total: 3_000, entries_total: 3_000, sink_exclusions_total: 0 },
+      exclusions: [],
+      locked: { lock_records_seen: 0, total_locked: 0, attributions: [], custody: null },
+      provenance: {
+        sink_ledger: null,
+        lock_evidence: {
+          source: "rpc",
+          program_id: "GsSCS3vPWrtJ5Y9aEVVT65fmrex5P5RGHXdZvsdbWgfo",
+          commitment: "confirmed",
+          anchor_slot: 1,
+          records_seen: 0,
+          total_locked: 0,
+        },
+      },
     };
     // The set is string-ascending → the schema gate passes. If string order
     // disagreed with byte order, the tree builder MUST reject (fail-closed).

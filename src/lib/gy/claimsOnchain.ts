@@ -232,6 +232,7 @@ export async function readClaimsOnchain(
       ? null
       : {
           merkleRoot: hex(registry.lpSnapshotMerkleRoot),
+          ammProgramId: registry.ammProgramId.toBase58(),
           lpTotalSupplyAtSnapshot: registry.lpTotalSupplyAtSnapshot,
           lpHolderPoolTotalLamports: registry.lpHolderPoolTotalLamports,
         };

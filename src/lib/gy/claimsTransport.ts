@@ -42,9 +42,10 @@ export type ClaimsReasonCode =
   | "PARSE_FAILED"
   | "INTEGRITY_FAILED"
   | "FUTURE_ARTIFACT"
+  | "SOURCE_CONFLICT"
   | "MALFORMED_ENVELOPE";
 
-export type ClaimsSourceKind = "path" | "url" | "none";
+export type ClaimsSourceKind = "path" | "url" | "stable-pointer" | "none";
 
 /** Envelope for the distribution-artifact half of the payload. */
 export interface ClaimsTransport {
@@ -171,6 +172,10 @@ export function effectiveClaimsState(payload: ClaimsTransportPayload, nowMs: num
     reasonCode: null,
     ageMs,
     maxAgeMs,
+    // D4: stale claims data is informational ONLY — a prepared claim
+    // instruction computed while the artifact was fresh must never remain
+    // actionable once the freshness budget lapses.
+    wallet: payload.wallet === null ? null : { ...payload.wallet, preparedClaim: null },
   };
 }
 
@@ -251,7 +256,7 @@ function reqU64Str(v: unknown, what: string): string {
 
 function validateDistribution(d: unknown): DistributionPublic {
   if (!isObj(d)) throw new Error("distribution must be an object");
-  if (d.formatVersion !== 1) throw new Error("distribution.formatVersion must be 1");
+  if (d.formatVersion !== 2) throw new Error("distribution.formatVersion must be 2 (claims-grade v2)");
   if (typeof d.poolAddress !== "string" || d.poolAddress.length < 32) throw new Error("distribution.poolAddress invalid");
   if (typeof d.ammProgramId !== "string" || d.ammProgramId.length < 32) throw new Error("distribution.ammProgramId invalid");
   if (typeof d.lpMint !== "string" || d.lpMint.length < 32) throw new Error("distribution.lpMint invalid");
@@ -276,7 +281,7 @@ function validateDistribution(d: unknown): DistributionPublic {
     if (forbidden in d) throw new Error(`distribution must not carry "${forbidden}" (privacy projection only)`);
   }
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     poolAddress: d.poolAddress as string,
     ammProgramId: d.ammProgramId as string,
     lpMint: d.lpMint as string,
@@ -467,7 +472,7 @@ function hydrateClaimsPayloadInner(json: unknown, nowMs: number): ClaimsTranspor
   if (reason === undefined) throw new Error("payload rejected by the client-side gate");
   const src = json.source;
   if (!isObj(src)) throw new Error("payload rejected by the client-side gate");
-  if (src.kind !== "path" && src.kind !== "url" && src.kind !== "none") throw new Error("payload rejected by the client-side gate");
+  if (src.kind !== "path" && src.kind !== "url" && src.kind !== "stable-pointer" && src.kind !== "none") throw new Error("payload rejected by the client-side gate");
   const uri = src.uri === null ? null : optStr(src.uri);
   if (uri === undefined) throw new Error("payload rejected by the client-side gate");
   const ageMs = json.ageMs === null ? null : optFinite(json.ageMs);
@@ -493,11 +498,20 @@ function hydrateClaimsPayloadInner(json: unknown, nowMs: number): ClaimsTranspor
   // half-broken payload is not data).
   if (artifactState === "missing" || artifactState === "corrupt") {
     if (json.distribution !== null && json.distribution !== undefined) throw new Error("payload rejected by the client-side gate");
+    const mcWallet = validateOptStrict(json.wallet, validateWalletClaim);
+    // D4 (review): missing/corrupt artifacts are equally non-actionable —
+    // an envelope claiming them while carrying a prepared claim instruction
+    // is dishonest and refused whole.
+    if (mcWallet !== null && mcWallet.preparedClaim !== null) {
+      throw new Error(
+        `payload rejected by the client-side gate: a ${artifactState} artifact must never carry a prepared claim instruction`,
+      );
+    }
     return {
       ...transport,
       distribution: null,
       onchain: validateOptStrict(json.onchain, validateOnchain),
-      wallet: validateOptStrict(json.wallet, validateWalletClaim),
+      wallet: mcWallet,
     };
   }
 
@@ -511,11 +525,22 @@ function hydrateClaimsPayloadInner(json: unknown, nowMs: number): ClaimsTranspor
   }
   if (checkedAtUnixMs > nowMs + 5 * 60_000) throw new Error("payload rejected by the client-side gate");
 
+  const wallet = validateOptStrict(json.wallet, validateWalletClaim);
+  // D4 (review): a prepared claim instruction may ride ONLY with a VALID
+  // artifact. ANY non-valid state (stale | missing | corrupt) is
+  // informational-only — an envelope claiming a non-valid state while
+  // carrying an actionable instruction is dishonest and refused whole.
+  if (artifactState !== "valid" && wallet !== null && wallet.preparedClaim !== null) {
+    throw new Error(
+      `payload rejected by the client-side gate: a ${artifactState} artifact must never carry a prepared claim instruction`,
+    );
+  }
+
   return {
     ...transport,
     distribution,
     onchain: validateOptStrict(json.onchain, validateOnchain),
-    wallet: validateOptStrict(json.wallet, validateWalletClaim),
+    wallet,
   };
 }
 

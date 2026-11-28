@@ -12,7 +12,13 @@
 //
 // THE WRITER, byte for byte: the artifact format below is a transcription of
 // graveyield-protocol snapshotter/src/artifact.rs (SnapshotArtifact,
-// ARTIFACT_FORMAT_VERSION 1):
+// ARTIFACT_FORMAT_VERSION 2 — the D2 claims-grade format). D4: the console
+// consumes EXACTLY the v2 claims-grade shape. A genuine v1 document (no
+// exclusions/locked/provenance fields) fails at the schema gate; a
+// v1-labeled v2-shaped document fails the explicit version gate. There is NO
+// legacy compatibility mode: a claims artifact without complete governed
+// provenance can never be claims-grade, and permissive parsing that silently
+// drops security-relevant fields is not permitted.
 //
 //   {
 //     "format_version": 1,
@@ -57,7 +63,14 @@ import { SnapshotMerkleTree, computeLeaf, verifyMerkleProof, type HolderEntry } 
 import { buildClaimLpProceedsIx } from "./vendor/graveyield-sdk/claimsInstructions";
 import { claimRecordPda } from "./vendor/graveyield-sdk/pdas";
 
-export const DISTRIBUTION_FORMAT_VERSION = 1;
+export const DISTRIBUTION_FORMAT_VERSION = 2;
+
+/** The only locker program claims-grade provenance may name (UNCX Raydium AMM V4). */
+export const UNCX_RAYDIUM_AMM_V4_LOCKER_PROGRAM_ID =
+  "GsSCS3vPWrtJ5Y9aEVVT65fmrex5P5RGHXdZvsdbWgfo";
+
+/** The governed sink-ledger schema version provenance must carry. */
+export const CLAIMS_SINK_LEDGER_SCHEMA_VERSION = 1;
 
 /** One claimant row in the sealed artifact (server-side only — never transported). */
 export interface DistributionEntry {
@@ -85,6 +98,33 @@ export interface DistributionArtifact {
     enumeratedTotal: bigint;
     entriesTotal: bigint;
     sinkExclusionsTotal: bigint;
+  };
+  /** Per-owner exclusion ledger (v2, canonical ascending-owner order). */
+  exclusions: Array<{ owner: string; lpBalance: bigint; reason: string }>;
+  /** Locked-LP attribution report (v2). */
+  locked: {
+    lockRecordsSeen: number;
+    totalLocked: bigint;
+    attributions: Array<{ owner: string; lpBalance: bigint }>;
+    custody: { tokenAccount: string; owner: string; balance: bigint; method: string } | null;
+  };
+  /** Governed-input provenance (v2) — REQUIRED for claims-grade acceptance. */
+  provenance: {
+    sinkLedger: {
+      schemaVersion: number;
+      ledgerId: string;
+      inputSha256: string;
+      entryCount: number;
+      sinkExclusionsTotal: bigint;
+    } | null;
+    lockEvidence: {
+      source: string;
+      programId: string;
+      commitment: string;
+      anchorSlot: number;
+      recordsSeen: number;
+      totalLocked: bigint;
+    };
   };
 }
 
@@ -130,20 +170,29 @@ function str(v: unknown, what: string): string {
   return v;
 }
 
-/** serde u64-as-number → exact BigInt. Rejects non-integers and negatives. */
+/** serde u64 → exact BigInt. Accepts an exact bigint (D4 exact-integer
+ * parse) or a JSON number within the exact integer range; rejects floats
+ * that may have been rounded, negatives, and non-integers. */
 function u64num(v: unknown, what: string): bigint {
-  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
-    throw new ClaimsError(`${what} must be a non-negative integer (u64), got ${JSON.stringify(v)}`);
+  if (typeof v === "bigint") {
+    if (v < 0n) throw new ClaimsError(`${what} must be a non-negative integer (u64)`);
+    return v;
   }
-  return BigInt(v);
+  if (typeof v === "number" && Number.isInteger(v) && v >= 0 && Number.isSafeInteger(v)) {
+    return BigInt(v);
+  }
+  throw new ClaimsError(
+    `${what} must be an exact non-negative integer (u64), got ${JSON.stringify(v)} — an imprecise (float-rounded) value is refused, never trusted`,
+  );
 }
 
-/** u64-as-number constrained to the JS safe range (slots, counts). */
+/** u64 constrained to the JS safe range (slots, counts). */
 function safeUint(v: unknown, what: string): number {
-  if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > Number.MAX_SAFE_INTEGER) {
-    throw new ClaimsError(`${what} must be a non-negative integer within the safe range, got ${JSON.stringify(v)}`);
+  const n = u64num(v, what);
+  if (n > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new ClaimsError(`${what} exceeds the safe integer range`);
   }
-  return v;
+  return Number(n);
 }
 
 function hex32(v: unknown, what: string): string {
@@ -204,6 +253,11 @@ export function canonicalQueryWallet(raw: string | null | undefined): string | n
  */
 export function parseDistributionArtifact(raw: unknown): DistributionArtifact {
   if (!isObj(raw)) throw new ClaimsError("root must be an object");
+  if (raw.format_version === 1) {
+    throw new ClaimsError(
+      `unsupported artifact format_version 1 — the legacy v1 distribution (no exclusions, locked-LP report, or governed provenance) is not claims-grade and is refused; the Rust producer emits format ${DISTRIBUTION_FORMAT_VERSION}`,
+    );
+  }
   if (raw.format_version !== DISTRIBUTION_FORMAT_VERSION) {
     throw new ClaimsError(
       `unsupported artifact format_version ${JSON.stringify(raw.format_version)} (expected ${DISTRIBUTION_FORMAT_VERSION}) — fail-closed on a format this contract cannot fully re-derive`,
@@ -258,6 +312,11 @@ export function parseDistributionArtifact(raw: unknown): DistributionArtifact {
     entriesTotal: u64num(raw.reconciliation.entries_total, "reconciliation.entries_total"),
     sinkExclusionsTotal: u64num(raw.reconciliation.sink_exclusions_total, "reconciliation.sink_exclusions_total"),
   };
+
+  // ── v2 blocks (REQUIRED — their absence makes the artifact non-claims-grade) ──
+  const exclusions = parseExclusionLedger(raw.exclusions, reconciliation.sinkExclusionsTotal);
+  const locked = parseLockedReport(raw.locked, entries);
+  const provenance = parseProvenance(raw.provenance, exclusions, locked, safeUint(raw.snapshot_slot, "snapshot_slot"));
   // Closing identity (snapshotter/src/artifact.rs::verify_integrity):
   //   Σ entries + sinks == enumerated == supply.
   const sumEntries = entries.reduce((a, e) => a + e.lpBalance, 0n);
@@ -285,6 +344,178 @@ export function parseDistributionArtifact(raw: unknown): DistributionArtifact {
     treeDepth,
     entries,
     reconciliation,
+    exclusions,
+    locked,
+    provenance,
+  };
+}
+
+/* ── v2 block parsers (fail-closed; mirrors artifact.rs verify_provenance) ── */
+
+function parseExclusionLedger(
+  raw: unknown,
+  sinkExclusionsTotal: bigint,
+): DistributionArtifact["exclusions"] {
+  if (!Array.isArray(raw)) throw new ClaimsError("exclusions must be an array (v2 field — its absence means a non-claims-grade artifact)");
+  const out: DistributionArtifact["exclusions"] = [];
+  let sinkTotal = 0n;
+  let prev: string | null = null;
+  for (let i = 0; i < raw.length; i++) {
+    const x = raw[i];
+    if (typeof x !== "object" || x === null || Array.isArray(x)) throw new ClaimsError(`exclusions[${i}] must be an object`);
+    const row = x as Record<string, unknown>;
+    const owner = pubkeyStr(row.owner, `exclusions[${i}].owner`);
+    const lpBalance = u64num(row.lp_balance, `exclusions[${i}].lp_balance`);
+    const reason = str(row.reason, `exclusions[${i}].reason`);
+    // Owner strings are canonical base58 (pubkeyStr canonicalizes), so
+    // string order == byte order; the SDK tree builder remains the
+    // authority for the entry set itself.
+    if (prev !== null && owner <= prev) throw new ClaimsError("exclusions are not in canonical ascending-owner order");
+    prev = owner;
+    if (reason === "zero_balance") {
+      if (lpBalance !== 0n) throw new ClaimsError(`zero_balance exclusion for ${owner} carries a nonzero balance`);
+    } else if (reason === "explicit_sink") {
+      sinkTotal += lpBalance;
+    } else {
+      throw new ClaimsError(`unknown exclusion reason "${reason}" for owner ${owner}`);
+    }
+    out.push({ owner, lpBalance, reason });
+  }
+  if (sinkTotal !== sinkExclusionsTotal) {
+    throw new ClaimsError(
+      `Σ explicit sink exclusions (${sinkTotal}) != reconciliation.sink_exclusions_total (${sinkExclusionsTotal})`,
+    );
+  }
+  return out;
+}
+
+function parseLockedReport(
+  raw: unknown,
+  entries: DistributionEntry[],
+): DistributionArtifact["locked"] {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ClaimsError("locked must be an object (v2 field — its absence means a non-claims-grade artifact)");
+  }
+  const l = raw as Record<string, unknown>;
+  const lockRecordsSeen = safeUint(l.lock_records_seen, "locked.lock_records_seen");
+  const totalLocked = u64num(l.total_locked, "locked.total_locked");
+  if (!Array.isArray(l.attributions)) throw new ClaimsError("locked.attributions must be an array");
+  let attributed = 0n;
+  let prev: string | null = null;
+  const attributions = l.attributions.map((a, i) => {
+    if (typeof a !== "object" || a === null || Array.isArray(a)) throw new ClaimsError(`locked.attributions[${i}] must be an object`);
+    const row = a as Record<string, unknown>;
+    const owner = pubkeyStr(row.owner, `locked.attributions[${i}].owner`);
+    const lpBalance = u64num(row.lp_balance, `locked.attributions[${i}].lp_balance`);
+    if (prev !== null && owner <= prev) throw new ClaimsError("locked attributions are not in canonical ascending-owner order");
+    prev = owner;
+    attributed += lpBalance;
+    return { owner, lpBalance };
+  });
+  if (attributed !== totalLocked) {
+    throw new ClaimsError(`Σ locked attributions (${attributed}) != locked.total_locked (${totalLocked})`);
+  }
+  let custody: DistributionArtifact["locked"]["custody"] = null;
+  if (l.custody !== null && l.custody !== undefined) {
+    if (typeof l.custody !== "object" || Array.isArray(l.custody)) throw new ClaimsError("locked.custody must be an object or null");
+    const c = l.custody as Record<string, unknown>;
+    const balance = u64num(c.balance, "locked.custody.balance");
+    if (totalLocked === 0n) throw new ClaimsError("custody resolution present with zero locked total");
+    if (balance !== totalLocked) throw new ClaimsError("locked.custody.balance != locked.total_locked");
+    const owner = pubkeyStr(c.owner, "locked.custody.owner");
+    if (entries.some((e) => e.owner === owner)) {
+      throw new ClaimsError("custody owner also holds a claimable leaf; attributing to a PDA would strand the claim");
+    }
+    custody = {
+      tokenAccount: pubkeyStr(c.token_account, "locked.custody.token_account"),
+      owner,
+      balance,
+      method: str(c.method, "locked.custody.method"),
+    };
+  } else if (totalLocked !== 0n) {
+    throw new ClaimsError("locked total > 0 but no custody resolution");
+  }
+  return { lockRecordsSeen, totalLocked, attributions, custody };
+}
+
+const LOWER64_RE = /^[0-9a-f]{64}$/;
+
+function parseProvenance(
+  raw: unknown,
+  exclusions: DistributionArtifact["exclusions"],
+  locked: DistributionArtifact["locked"],
+  snapshotSlot: number,
+): DistributionArtifact["provenance"] {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ClaimsError(
+      "provenance is REQUIRED — an artifact without complete governed-input provenance is never claims-grade (D2)",
+    );
+  }
+  const p = raw as Record<string, unknown>;
+  const lockRaw = p.lock_evidence;
+  if (typeof lockRaw !== "object" || lockRaw === null || Array.isArray(lockRaw)) {
+    throw new ClaimsError("provenance.lock_evidence is required");
+  }
+  const le = lockRaw as Record<string, unknown>;
+  const source = str(le.source, "provenance.lock_evidence.source");
+  if (source !== "rpc") {
+    throw new ClaimsError(`unsupported provenance.lock_evidence.source "${source}" (supported: "rpc")`);
+  }
+  const programId = pubkeyStr(le.program_id, "provenance.lock_evidence.program_id");
+  if (programId !== UNCX_RAYDIUM_AMM_V4_LOCKER_PROGRAM_ID) {
+    throw new ClaimsError(
+      `unsupported provenance.lock_evidence.program_id ${programId} (this implementation supports exactly the UNCX Raydium AMM V4 locker)`,
+    );
+  }
+  const commitment = str(le.commitment, "provenance.lock_evidence.commitment");
+  if (commitment !== "confirmed" && commitment !== "finalized") {
+    throw new ClaimsError(`unsupported provenance.lock_evidence.commitment "${commitment}"`);
+  }
+  const anchorSlot = safeUint(le.anchor_slot, "provenance.lock_evidence.anchor_slot");
+  if (anchorSlot <= 0) throw new ClaimsError("provenance.lock_evidence.anchor_slot must be positive");
+  if (anchorSlot !== snapshotSlot) {
+    throw new ClaimsError("provenance.lock_evidence.anchor_slot != snapshot_slot");
+  }
+  const recordsSeen = safeUint(le.records_seen, "provenance.lock_evidence.records_seen");
+  const totalLocked = u64num(le.total_locked, "provenance.lock_evidence.total_locked");
+  if (recordsSeen !== locked.lockRecordsSeen) {
+    throw new ClaimsError("provenance.lock_evidence.records_seen != locked.lock_records_seen");
+  }
+  if (totalLocked !== locked.totalLocked) {
+    throw new ClaimsError("provenance.lock_evidence.total_locked != locked.total_locked");
+  }
+
+  let sinkLedger: DistributionArtifact["provenance"]["sinkLedger"] = null;
+  const explicitSinks = exclusions.filter((x) => x.reason === "explicit_sink").length;
+  if (p.sink_ledger !== null && p.sink_ledger !== undefined) {
+    if (typeof p.sink_ledger !== "object" || Array.isArray(p.sink_ledger)) {
+      throw new ClaimsError("provenance.sink_ledger must be an object or null");
+    }
+    const sl = p.sink_ledger as Record<string, unknown>;
+    const schemaVersion = safeUint(sl.schema_version, "provenance.sink_ledger.schema_version");
+    if (schemaVersion !== CLAIMS_SINK_LEDGER_SCHEMA_VERSION) {
+      throw new ClaimsError(`unsupported provenance.sink_ledger.schema_version ${schemaVersion}`);
+    }
+    const ledgerId = str(sl.ledger_id, "provenance.sink_ledger.ledger_id");
+    if (ledgerId.trim().length === 0) throw new ClaimsError("provenance.sink_ledger.ledger_id is empty");
+    const inputSha256 = str(sl.input_sha256, "provenance.sink_ledger.input_sha256");
+    if (!LOWER64_RE.test(inputSha256)) {
+      throw new ClaimsError("provenance.sink_ledger.input_sha256 must be a lowercase 64-hex SHA-256 digest");
+    }
+    const entryCount = safeUint(sl.entry_count, "provenance.sink_ledger.entry_count");
+    const sinkExclusionsTotal = u64num(sl.sink_exclusions_total, "provenance.sink_ledger.sink_exclusions_total");
+    if (entryCount !== explicitSinks) {
+      throw new ClaimsError("provenance.sink_ledger.entry_count != explicit sink exclusions");
+    }
+    sinkLedger = { schemaVersion, ledgerId, inputSha256, entryCount, sinkExclusionsTotal };
+  } else if (explicitSinks > 0) {
+    throw new ClaimsError(
+      "artifact contains explicit sink exclusions but the provenance carries no governed sink ledger",
+    );
+  }
+  return {
+    sinkLedger,
+    lockEvidence: { source, programId, commitment, anchorSlot, recordsSeen, totalLocked },
   };
 }
 
@@ -386,6 +617,57 @@ export function expectedClaimAmountLamports(
   return (lpHolderPoolTotalLamports * lpBalanceAtSnapshot) / lpTotalSupplyAtSnapshot;
 }
 
+/**
+ * D4 exact-integer entry point: parse the artifact from its EXACT text with
+ * a u64-aware reviver (JSON.parse source-text access, Node ≥ 21), then run
+ * the full schema gate + SDK integrity. A u64 that would have been
+ * float-rounded by a plain JSON.parse is parsed exactly or refused — never
+ * silently imprecise. Returns the fully verified artifact.
+ */
+export function parseDistributionFromTextExact(text: string): DistributionArtifact {
+  return parseDistributionArtifact(parseDistributionJsonExact(text));
+}
+
+function parseDistributionJsonExact(text: string): unknown {
+  const U64_KEYS = new Set([
+    "snapshot_slot",
+    "lp_total_supply_at_snapshot",
+    "leaf_count",
+    "tree_depth",
+    "lp_balance",
+    "entries_total",
+    "sink_exclusions_total",
+    "enumerated_total",
+    "lock_records_seen",
+    "total_locked",
+    "balance",
+    "entry_count",
+    "anchor_slot",
+    "records_seen",
+    "schema_version",
+  ]);
+  const reviver = (key: string, value: unknown, context?: { source?: string }): unknown => {
+    if (U64_KEYS.has(key) && typeof value === "number") {
+      const source = context?.source;
+      if (typeof source === "string" && /^\d+$/.test(source)) return BigInt(source);
+      if (!Number.isSafeInteger(value)) {
+        throw new ClaimsError(
+          `field "${key}" exceeded exact-integer parse capability — refusing an imprecise artifact`,
+        );
+      }
+      return value;
+    }
+    return value;
+  };
+  return JSON.parse(text, reviver as Parameters<typeof JSON.parse>[1]) as unknown;
+}
+
+export function parseAndVerifyDistributionFromText(text: string): DistributionArtifact {
+  const artifact = parseDistributionFromTextExact(text);
+  verifyDistributionIntegrity(artifact);
+  return artifact;
+}
+
 /* ── Wallet claim view — the server-side state machine ────────────────
  *
  * The owner's vocabulary, one state per lookup outcome. The transaction
@@ -473,6 +755,8 @@ export interface WalletClaimView {
 /** On-chain registry facts the state machine consumes (pre-resolved by the route). */
 export interface RegistryFacts {
   merkleRoot: string;
+  /** The registry's AMM program (D4: must equal the artifact's amm_program_id). */
+  ammProgramId: string;
   lpTotalSupplyAtSnapshot: bigint;
   lpHolderPoolTotalLamports: bigint;
 }
@@ -643,8 +927,46 @@ export function walletClaimView(input: WalletClaimInput): WalletClaimView {
     };
   }
 
-  // 5. The artifact must be bound to the on-chain root — proofs from an
-  //    unbound artifact are unusable no matter how internally consistent.
+  // 5. The artifact must be bound to the on-chain registry — D4: pool (by
+  //    derivation — the registry PDA is derived from the artifact's pool),
+  //    AMM program, pinned supply, and root. Any mismatch means this
+  //    artifact is not the sealed snapshot for THIS salvage.
+  if (registry.ammProgramId !== artifact.ammProgramId) {
+    return {
+      wallet,
+      poolAddress,
+      claimRecordPda: recordPda,
+      state: "snapshot-unavailable",
+      reason:
+        "Snapshot unavailable — the on-chain PoolRegistry's AMM program does not match the distribution artifact. This artifact is not bound to this pool's settlement, so no claim can be prepared from it.",
+      entry: null,
+      proofStatus: null,
+      claimRecord: null,
+      claimableLamports: null,
+      claimedLamports: null,
+      remainingLamports: null,
+      preparedClaim: null,
+      amountNote: null,
+    };
+  }
+  if (registry.lpTotalSupplyAtSnapshot !== artifact.lpTotalSupplyAtSnapshot) {
+    return {
+      wallet,
+      poolAddress,
+      claimRecordPda: recordPda,
+      state: "snapshot-unavailable",
+      reason:
+        "Snapshot unavailable — the distribution artifact's pinned LP supply does not match the on-chain PoolRegistry supply pin. This artifact is not the sealed snapshot for this salvage, so no proof from it can be honored.",
+      entry: null,
+      proofStatus: null,
+      claimRecord: null,
+      claimableLamports: null,
+      claimedLamports: null,
+      remainingLamports: null,
+      preparedClaim: null,
+      amountNote: null,
+    };
+  }
   if (registry.merkleRoot !== artifact.merkleRoot) {
     return {
       wallet,

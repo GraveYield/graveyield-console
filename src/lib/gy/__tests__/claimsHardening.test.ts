@@ -41,7 +41,7 @@ function hexRepeat(b: string): string {
 /** A minimal artifact that passes the schema gate (integrity is separate). */
 function validRawArtifact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    format_version: 1,
+    format_version: 2,
     pool_address: VALID_PROGRAM_ID,
     amm_program_id: VALID_VAULT_ID,
     lp_mint: SYSTEM_PROGRAM,
@@ -52,6 +52,19 @@ function validRawArtifact(overrides: Record<string, unknown> = {}): Record<strin
     tree_depth: 0,
     entries: [{ owner: VALID_VAULT_ID, lp_balance: 1000, leaf: hexRepeat("bb"), proof: [] }],
     reconciliation: { enumerated_total: 1000, entries_total: 1000, sink_exclusions_total: 0 },
+    exclusions: [],
+    locked: { lock_records_seen: 0, total_locked: 0, attributions: [], custody: null },
+    provenance: {
+      sink_ledger: null,
+      lock_evidence: {
+        source: "rpc",
+        program_id: "GsSCS3vPWrtJ5Y9aEVVT65fmrex5P5RGHXdZvsdbWgfo",
+        commitment: "confirmed",
+        anchor_slot: 100,
+        records_seen: 0,
+        total_locked: 0,
+      },
+    },
     ...overrides,
   };
 }

@@ -40,12 +40,18 @@ import {
   type ClaimsTransportPayload,
 } from "./claimsTransport";
 import {
-  parseDistributionArtifact,
+  parseDistributionFromTextExact,
   publicDistribution,
   verifyDistributionIntegrity,
   ClaimsError,
   type DistributionArtifact,
 } from "./claimsContract";
+import {
+  resolveClaimsStablePointer,
+  ClaimsResolverError,
+  type ClaimsResolverEnv,
+  type ClaimsResolverStage,
+} from "./claimsStablePointerResolver";
 
 /** Default hard cap for artifact size: a 47-holder artifact is ~40 KB; 8 MiB is generous headroom. */
 export const DEFAULT_MAX_CLAIMS_ARTIFACT_BYTES = 8 * 1024 * 1024;
@@ -59,9 +65,15 @@ export const DEFAULT_CLAIMS_FETCH_TIMEOUT_MS = 10_000;
  */
 export const DEFAULT_CLAIMS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-export interface ClaimsSourceEnv {
+export interface ClaimsSourceEnv extends ClaimsResolverEnv {
   GY_CLAIMS_PATH?: string | null;
   GY_CLAIMS_URL?: string | null;
+  /**
+   * D4 stable-pointer topology: GitHub repo ("owner/repo") whose
+   * refs/tags/claims-artifact-prod identifies the immutable published
+   * artifact. Mutually exclusive with PATH/URL.
+   */
+  GY_CLAIMS_GITHUB_REPO?: string | null;
   /** Freshness budget override (ms, positive integer). Unset → the default. */
   GY_CLAIMS_MAX_AGE_MS?: string | null;
 }
@@ -149,13 +161,34 @@ export async function resolveClaimsSource(
   const path = env.GY_CLAIMS_PATH?.trim() ? env.GY_CLAIMS_PATH.trim() : null;
   const url = env.GY_CLAIMS_URL?.trim() ? env.GY_CLAIMS_URL.trim() : null;
 
-  if (path && url) {
+  const pointerRepo = env.GY_CLAIMS_GITHUB_REPO?.trim() || null;
+  if ([path, url, pointerRepo].filter((x) => x !== null).length > 1) {
     return unavailable(
       "missing",
       "SOURCE_CONFLICT",
-      "Both GY_CLAIMS_PATH and GY_CLAIMS_URL are configured — set exactly one distribution source.",
+      "Multiple claims sources configured (GY_CLAIMS_PATH / GY_CLAIMS_URL / GY_CLAIMS_GITHUB_REPO) — set exactly one.",
       { kind: "none", uri: null },
     );
+  }
+  if (pointerRepo) {
+    // D4 stable-pointer topology: resolve the chain, then the SAME contract
+    // gate over the exact verified bytes. No caching, no latest-URL.
+    const stage = (e: ClaimsResolverError): ClaimsResolverStage => e.stage;
+    let resolved: Awaited<ReturnType<typeof resolveClaimsStablePointer>>;
+    try {
+      resolved = await resolveClaimsStablePointer(env, { fetchImpl: deps.fetchImpl, maxBytes: maxBytes, fetchTimeoutMs: deps.fetchTimeoutMs });
+    } catch (e) {
+      if (e instanceof ClaimsResolverError) {
+        return unavailable(
+          e.artifactState,
+          "FETCH_FAILED",
+          `Claims stable-pointer resolution failed at stage "${stage(e)}": ${e.message}`,
+          { kind: "stable-pointer", uri: `${env.GY_CLAIMS_GITHUB_REPO?.trim()}@claims-artifact-prod` },
+        );
+      }
+      return unavailable("missing", "FETCH_FAILED", `Claims stable-pointer resolution failed: ${errText(e)}`, { kind: "stable-pointer", uri: null });
+    }
+    return claimsBytesToPayload(resolved.artifactBytes, { nowMs, checkedAtUnixMs, source: { kind: "stable-pointer", uri: `${pointerRepo}@${resolved.pointer.versionedTag}` }, maxAgeMs });
   }
   if (!path && !url) {
     return unavailable(
@@ -269,22 +302,16 @@ export function claimsBytesToPayload(
     artifact: null,
   });
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-  } catch (e) {
-    return unavailable("PARSE_FAILED", `Distribution artifact is not valid JSON (${errText(e)}).`);
-  }
-
+  // D4: exact-integer parse + schema + provenance gate (PARSE_FAILED), then
+  // the canonical SDK integrity gate (INTEGRITY_FAILED) — distinct codes.
   let artifact: DistributionArtifact;
+  const rawText = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   try {
-    artifact = parseDistributionArtifact(parsed);
+    artifact = parseDistributionFromTextExact(rawText);
   } catch (e) {
     const msg = e instanceof ClaimsError ? e.message : `${e instanceof Error ? e.message : String(e)}`;
     return unavailable("PARSE_FAILED", `Distribution artifact rejected by the fail-closed contract: ${msg}`);
   }
-
-  // Integrity: the whole artifact re-derives through the canonical SDK tree.
   try {
     verifyDistributionIntegrity(artifact);
   } catch (e) {
@@ -310,5 +337,32 @@ export function claimsBytesToPayload(
       wallet: null,
     },
     artifact,
+  };
+}
+
+
+/**
+ * D4 (review): PRODUCTION SOURCE ENFORCEMENT. An actionable claim
+ * instruction (prepared `claim_lp_proceeds`) may be produced ONLY when
+ * the artifact arrived through the immutable stable-pointer topology —
+ * the only source whose bytes were digest-verified against the published
+ * pointer. Direct GY_CLAIMS_PATH / GY_CLAIMS_URL sources remain usable
+ * for non-production or informational display, but their wallet views
+ * are stripped of `preparedClaim` (explicit non-actionable, with an
+ * honest note): they can never bypass stable-pointer verification.
+ */
+export function enforceActionableClaimsSourcePolicy(
+  walletView: import("./claimsContract").WalletClaimView,
+  sourceKind: import("./claimsTransport").ClaimsSourceKind,
+): import("./claimsContract").WalletClaimView {
+  if (sourceKind === "stable-pointer") return walletView;
+  if (walletView.preparedClaim === null && walletView.state !== "claimable") return walletView;
+  return {
+    ...walletView,
+    preparedClaim: null,
+    amountNote:
+      walletView.state === "claimable"
+        ? "This environment's claims source is not the immutable stable pointer (GY_CLAIMS_GITHUB_REPO unset) — the view is informational-only and cannot prepare a claim transaction. Production actionable claims require the verified claims-artifact publication."
+        : walletView.amountNote,
   };
 }
